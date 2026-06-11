@@ -1,0 +1,1430 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Osborn Finance</title>
+<style>
+/* ============ DESIGN TOKENS ============ */
+:root{
+  --bg:#f7f5fb; --surface:#ffffff; --ink:#1b1530; --muted:#675f7e; --faint:#8d86a4;
+  --line:#dcd5ee; --hairline:#ebe7f7;
+  --v300:#c4b5fd; --v400:#a78bfa; --v500:#8b5cf6; --v600:#7c3aed; --v700:#6d28d9; --v900:#3b2a68;
+  --green:#188d49; --red:#d92020;
+  --ease:cubic-bezier(.22,.68,.32,1);
+}
+*{margin:0;padding:0;box-sizing:border-box;border-radius:0!important}
+html{-webkit-font-smoothing:antialiased;scroll-behavior:smooth}
+body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','SF Pro Text','Helvetica Neue',Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink);font-size:14px;line-height:1.5;overflow-x:hidden}
+::selection{background:var(--v600);color:#fff}
+.wrap{max-width:1280px;margin:0 auto;padding:0 32px 64px}
+.grad{background:linear-gradient(120deg,var(--v700),var(--v500) 55%,var(--v300));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;font-style:italic;padding-right:.06em}
+
+/* ============ NAV ============ */
+nav{background:rgba(249,247,253,.78);backdrop-filter:saturate(180%) blur(20px);border-bottom:1px solid transparent;position:sticky;top:0;z-index:10;transition:border-color .3s,box-shadow .3s}
+nav.scrolled{border-bottom-color:var(--hairline);box-shadow:0 8px 28px rgba(59,42,104,.08)}
+.nav-inner{max-width:1280px;margin:0 auto;padding:0 32px;height:56px;display:flex;align-items:center;justify-content:space-between}
+.nav-meta{font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums;letter-spacing:.02em}
+.brand{font-size:17px;font-weight:700;letter-spacing:-.02em;line-height:56px;cursor:pointer}
+.navlink{font-size:13px;font-weight:650;color:var(--muted);cursor:pointer;transition:color .15s;letter-spacing:-.01em;text-decoration:none}
+.navlink:hover,.navlink.active{color:var(--v600)}
+.pricegrid{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;align-items:stretch}
+@media(max-width:920px){.pricegrid{grid-template-columns:1fr}}
+.pcard{background:var(--surface);border:1px solid var(--line);padding:34px 30px;display:flex;flex-direction:column;position:relative;transition:box-shadow .3s var(--ease),border-color .3s}
+.pcard:hover{box-shadow:0 18px 48px rgba(109,40,217,.12);border-color:#c9bce8}
+.pcard.pop{border-color:var(--v600);border-top:3px solid var(--v600)}
+.pbadge{position:absolute;top:-1px;right:18px;background:var(--v600);color:#fff;font-size:10px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;padding:5px 10px}
+.ptier{font-size:11px;font-weight:700;color:var(--faint);text-transform:uppercase;letter-spacing:.14em;margin-bottom:14px}
+.pprice{font-size:40px;font-weight:700;letter-spacing:-.03em;line-height:1}
+.pprice .per{font-size:14px;color:var(--muted);font-weight:500;letter-spacing:0;font-style:normal}
+.pdesc{font-size:14px;color:var(--muted);margin:10px 0 20px}
+.pfeat{list-style:none;margin:0 0 26px;padding:0;flex:1}
+.pfeat li{font-size:13px;padding:7px 0;border-bottom:1px solid var(--hairline)}
+.pfeat li:last-child{border-bottom:none}
+.pfeat li::before{content:'✓';color:var(--v600);font-weight:700;margin-right:9px}
+.pbtn{width:100%}
+.pricefoot{text-align:center;font-size:12px;color:var(--faint);margin-top:26px}
+.brand .grad{font-weight:600}
+
+/* ============ HERO + AURORA ============ */
+.hero{position:relative;padding:96px 0 48px;text-align:center}
+.aurora{position:absolute;inset:-120px -40vw 0;pointer-events:none;z-index:-1;overflow:hidden;filter:blur(72px);opacity:.5}
+.aurora i{position:absolute;display:block}
+.aurora i:nth-child(1){width:560px;height:420px;left:14%;top:0;background:radial-gradient(closest-side,var(--v400),transparent 70%);animation:drift1 16s var(--ease) infinite alternate}
+.aurora i:nth-child(2){width:480px;height:380px;right:12%;top:60px;background:radial-gradient(closest-side,#d8c9ff,transparent 70%);animation:drift2 20s var(--ease) infinite alternate}
+.aurora i:nth-child(3){width:380px;height:300px;left:44%;top:140px;background:radial-gradient(closest-side,#efe9ff,transparent 70%);animation:drift1 24s var(--ease) infinite alternate-reverse}
+@keyframes drift1{from{transform:translate(0,0) scale(1)}to{transform:translate(70px,36px) scale(1.12)}}
+@keyframes drift2{from{transform:translate(0,0) scale(1.08)}to{transform:translate(-60px,24px) scale(.96)}}
+.eyebrow{font-size:11px;font-weight:700;letter-spacing:.22em;text-transform:uppercase;color:var(--v600);margin-bottom:18px}
+.hero h1{font-size:clamp(38px,6.2vw,60px);font-weight:700;letter-spacing:-.035em;line-height:1.1;color:var(--ink)}
+.hero p{font-size:16px;color:var(--muted);margin-top:16px;letter-spacing:-.01em}
+.load{opacity:0;transform:translateY(14px);animation:rise .8s var(--ease) forwards}
+.d1{animation-delay:.05s}.d2{animation-delay:.15s}.d3{animation-delay:.3s}.d4{animation-delay:.45s}
+@keyframes rise{to{opacity:1;transform:none}}
+
+/* ============ TABS ============ */
+.tabs{display:flex;justify-content:center;margin:40px auto 0;border:1px solid var(--line);width:max-content;max-width:100%;overflow-x:auto;background:var(--surface);box-shadow:0 2px 14px rgba(59,42,104,.05)}
+.tab{appearance:none;border:none;background:transparent;color:var(--muted);font:inherit;font-size:13px;font-weight:600;padding:12px 26px;cursor:pointer;white-space:nowrap;border-right:1px solid var(--line);transition:background .2s,color .2s;letter-spacing:-.01em}
+.tab:last-child{border-right:none}
+.tab:hover{background:#f4f0fc;color:var(--ink)}
+.tab.active{background:var(--v600);color:#fff}
+.tab:active{transform:translateY(1px)}
+
+/* ============ SECTIONS ============ */
+.sec{margin-top:72px}
+.sec-head{display:flex;align-items:baseline;gap:16px;margin-bottom:8px}
+.sec-num{font-size:12px;font-weight:700;color:var(--v400);font-variant-numeric:tabular-nums;letter-spacing:.08em}
+.sec-title{font-size:26px;font-weight:700;letter-spacing:-.028em}
+.sec-sub{font-size:13px;color:var(--faint);margin-bottom:24px;padding-left:40px}
+@media(max-width:640px){.sec-sub{padding-left:0}}
+.reveal{opacity:0;transform:translateY(22px);transition:opacity .7s var(--ease),transform .7s var(--ease)}
+.reveal.in{opacity:1;transform:none}
+
+/* ============ UPLOAD STATE ============ */
+.drop{border:2px dashed var(--v400);background:var(--surface);padding:72px 32px;text-align:center;cursor:pointer;transition:all .25s var(--ease);max-width:760px;margin:0 auto}
+.drop:hover,.drop.over{border-color:var(--v600);background:#f6f2fd;box-shadow:0 18px 48px rgba(109,40,217,.13)}
+.drop .ic{font-size:36px;margin-bottom:14px}
+.drop h4{font-size:19px;font-weight:700;letter-spacing:-.02em;margin-bottom:6px}
+.drop p{font-size:13px;color:var(--muted)}
+.drop .or{font-size:11px;color:var(--faint);text-transform:uppercase;letter-spacing:.14em;margin:22px 0 14px}
+.privacy{max-width:760px;margin:18px auto 0;text-align:center;font-size:12px;color:var(--faint)}
+.privacy b{color:var(--v600)}
+.uperr{display:none;max-width:760px;margin:16px auto 0;background:#fff2f2;border:1px solid var(--red);color:var(--red);padding:12px 16px;font-size:13px}
+
+/* ============ MAPPING STATE ============ */
+.mapgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin-bottom:22px}
+.mapfield .mlab{font-size:11px;font-weight:700;color:var(--faint);text-transform:uppercase;letter-spacing:.1em;margin-bottom:7px}
+.mapfield select{width:100%}
+.maperr{display:none;background:#fff2f2;border:1px solid var(--red);color:var(--red);padding:12px 16px;font-size:13px;margin-bottom:16px}
+.mapmode{display:flex;gap:18px;align-items:center;margin-bottom:20px;font-size:13px;color:var(--muted)}
+.mapmode label{display:flex;align-items:center;gap:7px;cursor:pointer}
+.mapactions{display:flex;gap:12px;margin-top:22px;align-items:center;flex-wrap:wrap}
+
+.chips{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px}
+.chip{display:inline-flex;align-items:center;gap:8px;padding:9px 14px;font-size:12px;font-weight:650;border:1px solid var(--line);background:var(--surface);letter-spacing:-.01em}
+.chip.ok{border-color:#b3dec4;background:#f1faf4;color:var(--green)}
+.chip.warn{border-color:#eed3a0;background:#fdf8ec;color:#9a6700}
+details.adv{margin:2px 0 20px}
+details.adv summary{cursor:pointer;font-size:12px;color:var(--muted);font-weight:650;user-select:none}
+details.adv summary:hover{color:var(--v600)}
+th.pvhl{background:var(--v600);color:#fff;border-bottom-color:var(--v600)}
+th.pvhl .role{display:block;font-size:9px;letter-spacing:.12em;color:#ddd0fa;margin-top:2px}
+td.pvhl{background:#f4f0fc}
+
+/* ============ LOADING STATE ============ */
+.decrypting{text-align:center;padding:90px 0 120px}
+.decrypting .big{font-size:30px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.decrypting .small{font-size:13px;color:var(--faint);margin-top:12px}
+
+/* ============ STAT CARDS ============ */
+.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);border:1px solid var(--line)}
+@media(max-width:1020px){.cards{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:560px){.cards{grid-template-columns:1fr}}
+.card{background:var(--surface);padding:30px 28px;transition:background .25s,box-shadow .25s}
+.card:hover{background:#fdfcff;box-shadow:inset 0 0 0 1px var(--v600)}
+.card .label{font-size:11px;font-weight:700;color:var(--faint);text-transform:uppercase;letter-spacing:.12em;margin-bottom:12px;transition:color .25s}
+.card:hover .label{color:var(--v600)}
+.card .value{font-size:33px;font-weight:700;letter-spacing:-.03em;line-height:1;display:inline-block;font-variant-numeric:tabular-nums;transition:transform .3s var(--ease);transform-origin:left center}
+.card:hover .value{transform:scale(1.03)}
+.card .detail{font-size:12px;color:var(--muted);margin-top:12px;letter-spacing:-.01em;min-height:18px}
+.green{color:var(--green)} .red{color:var(--red)} .blue{color:var(--v600)}
+
+/* ============ PANELS ============ */
+.row{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+@media(max-width:920px){.row{grid-template-columns:1fr}}
+.panel{background:var(--surface);border:1px solid var(--line);padding:30px;transition:box-shadow .3s var(--ease),border-color .3s}
+.panel:hover{box-shadow:0 18px 48px rgba(109,40,217,.09);border-color:#c9bce8}
+.panel h3{font-size:16px;font-weight:700;letter-spacing:-.02em;margin-bottom:4px}
+.panel .psub{font-size:12px;color:var(--faint);margin-bottom:20px}
+
+/* ============ ADVISOR ============ */
+.advisor{border-top:3px solid var(--v600);background:linear-gradient(180deg,#fdfcff,#f9f7fd)}
+.advrow{display:flex;gap:16px;padding:17px 12px;border-bottom:1px solid var(--hairline);align-items:flex-start;transition:background .2s}
+.advrow:last-child{border-bottom:none}
+.advrow:hover{background:#f5f1fd}
+.advicon{width:36px;height:36px;flex-shrink:0;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,var(--v600),var(--v400));color:#fff;font-size:15px;font-weight:700}
+.advbody{flex:1}
+.advtitle{font-weight:650;font-size:14px;letter-spacing:-.01em}
+.advtext{font-size:13px;color:var(--muted);margin-top:3px;line-height:1.55}
+.advsave{flex-shrink:0;font-size:12px;font-weight:700;color:var(--v600);background:#efe8fc;padding:6px 11px;white-space:nowrap;margin-top:2px}
+.advnote{font-size:11px;color:var(--faint);margin-top:16px}
+
+/* ============ DONUT ============ */
+.donut-wrap{display:flex;align-items:center;justify-content:center;padding:8px 0;flex:1}
+.donut-wrap svg{max-width:320px;width:100%;height:auto}
+.donut-seg{cursor:pointer;transition:opacity .2s;opacity:0;animation:segIn .5s var(--ease) forwards}
+@keyframes segIn{to{opacity:1}}
+.donut-wrap:hover .donut-seg{opacity:.55}
+.donut-wrap .donut-seg:hover{opacity:1}
+.donut-c{opacity:0;animation:segIn .6s .4s var(--ease) forwards}
+
+/* ============ LISTS ============ */
+.catlist,.merchlist{display:flex;flex-direction:column;max-height:380px;overflow-y:auto;scrollbar-width:thin}
+.catrow{display:flex;align-items:center;gap:12px;font-size:13px;cursor:pointer;padding:9px 10px;border-bottom:1px solid var(--hairline);transition:background .15s,transform .2s var(--ease)}
+.catrow:last-child{border-bottom:none}
+.catrow:hover{background:#f4f0fc;transform:translateX(4px)}
+.catrow:hover .name{color:var(--v600)}
+.catrow .dot{width:9px;height:9px;flex-shrink:0}
+.catrow .name{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:550;letter-spacing:-.01em;transition:color .15s}
+.catrow .n{font-size:11px;color:var(--faint);width:36px;text-align:right;flex-shrink:0;font-variant-numeric:tabular-nums}
+.catrow .bar{height:4px;flex-shrink:0;width:0;transition:width .8s var(--ease)}
+.catrow .val{font-variant-numeric:tabular-nums;font-weight:650;width:88px;text-align:right;flex-shrink:0;font-size:13px}
+
+/* ============ CASH FLOW ============ */
+.mchart{display:flex;align-items:flex-end;gap:16px;height:240px;padding:0 4px;overflow-x:auto;scrollbar-width:thin}
+.mgroup{display:flex;flex-direction:column;align-items:center;gap:8px;flex:1;min-width:60px}
+.mbars{display:flex;align-items:flex-end;gap:4px;height:190px}
+.mbar{width:20px;position:relative;height:0;transition:height .8s var(--ease)}
+.mbar .tip{position:absolute;top:-20px;left:50%;transform:translateX(-50%);font-size:10px;color:var(--muted);white-space:nowrap;display:none;font-variant-numeric:tabular-nums}
+.mbar:hover .tip{display:block}
+.mbars:hover .mbar{opacity:.8}
+.mbars .mbar:hover{opacity:1}
+.mlabel{font-size:11px;color:var(--faint);white-space:nowrap}
+.legend{display:flex;gap:20px;margin-bottom:16px;font-size:12px;color:var(--muted)}
+.legend span{display:flex;align-items:center;gap:7px}
+.legend i{width:9px;height:9px;display:inline-block}
+
+/* ============ LEDGER ============ */
+.controls{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px}
+select,input[type=text],input[type=search]{background:var(--surface);color:var(--ink);border:1px solid var(--line);padding:0 14px;height:42px;font:inherit;font-size:13px;outline:none;transition:border-color .2s,box-shadow .2s}
+select:focus,input:focus{border-color:var(--v600);box-shadow:0 0 0 3px rgba(124,58,237,.12)}
+input[type=text]{flex:1;min-width:200px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;padding:11px 12px;color:var(--faint);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.08em;border-bottom:2px solid var(--v600);cursor:pointer;user-select:none;white-space:nowrap;transition:color .15s}
+th:hover{color:var(--v600)}
+td{padding:10px 12px;border-bottom:1px solid var(--hairline);transition:background .12s}
+tr:hover td{background:#f4f0fc}
+.amt{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.tag{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:650;white-space:nowrap;letter-spacing:-.01em;cursor:pointer;transition:color .15s}
+.tag:hover{color:var(--v600)}
+.tag i{width:7px;height:7px;display:inline-block;flex-shrink:0}
+.tagsel{height:30px;padding:0 8px;font-size:12px}
+.count{font-size:12px;color:var(--faint);margin-top:14px;font-variant-numeric:tabular-nums}
+.morebox{display:flex;justify-content:center;margin-top:20px}
+.btn{border:1px solid var(--line);background:var(--surface);padding:12px 26px;font:inherit;font-size:13px;font-weight:650;cursor:pointer;color:var(--ink);transition:all .2s var(--ease);letter-spacing:-.01em}
+.btn:hover{border-color:var(--v600);color:var(--v600);background:#faf8ff;box-shadow:0 6px 20px rgba(124,58,237,.12)}
+.btn:active{transform:translateY(1px)}
+.btn.primary{background:var(--v600);border-color:var(--v600);color:#fff}
+.btn.primary:hover{background:var(--v700);color:#fff;box-shadow:0 8px 24px rgba(124,58,237,.3)}
+.btn.primary:disabled{background:var(--line);border-color:var(--line);color:var(--faint);cursor:not-allowed;box-shadow:none}
+.btn.danger{color:var(--red)}
+.btn.danger:hover{border-color:var(--red);color:var(--red);background:#fff7f7;box-shadow:0 6px 20px rgba(217,32,32,.1)}
+.empty{color:var(--faint);font-size:13px;padding:24px;text-align:center}
+#err{display:none;background:#fff2f2;border:1px solid var(--red);color:var(--red);padding:12px 16px;margin:16px 0;font-size:13px}
+
+/* ============ TOAST ============ */
+.toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%) translateY(16px);background:var(--ink);color:#fff;padding:13px 24px;font-size:13px;opacity:0;transition:opacity .35s var(--ease),transform .35s var(--ease);z-index:60;pointer-events:none;letter-spacing:-.01em}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+/* ============ FOOTER ============ */
+footer{border-top:1px solid var(--hairline);margin-top:72px;padding:28px 0 8px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14px}
+footer .fb{font-size:14px;font-weight:700;letter-spacing:-.02em}
+footer .fn{font-size:11px;color:var(--faint);letter-spacing:-.005em}
+.fctl{display:flex;gap:16px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--muted)}
+.fctl a{color:var(--v600);cursor:pointer;font-weight:650;text-decoration:none}
+.fctl a:hover{text-decoration:underline}
+.fctl a.danger{color:var(--red)}
+.fctl label{display:flex;align-items:center;gap:6px;cursor:pointer}
+
+/* ============ REDUCED MOTION ============ */
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important}
+  .load,.reveal{opacity:1!important;transform:none!important}
+  .donut-seg,.donut-c{opacity:1!important}
+}
+</style>
+</head>
+<body>
+
+<nav id="nav">
+  <div class="nav-inner">
+    <div class="nav-meta" id="navmeta">Runs entirely in your browser</div>
+    <div style="display:flex;align-items:center;gap:24px">
+      <a class="navlink" id="plansLink">Plans</a>
+      <div class="brand" id="brandHome" title="Back to home">Osborn <span class="grad">Finance</span></div>
+    </div>
+  </div>
+</nav>
+
+<div class="wrap">
+  <div class="hero">
+    <div class="aurora"><i></i><i></i><i></i></div>
+    <div class="eyebrow load d1">Personal dashboard · automated intelligence</div>
+    <h1 class="load d2">Your <span class="grad">Finances</span>,<br>in the eyes of <span class="grad">AI</span></h1>
+    <p class="load d3" id="range">Drop your bank's CSV export — analyzed privately, right here in your browser.</p>
+    <div class="tabs load d4" id="tabs" style="display:none">
+      <button class="tab" data-days="30">Last Month</button>
+      <button class="tab" data-days="91">3 Months</button>
+      <button class="tab" data-days="182">6 Months</button>
+      <button class="tab" data-days="365">Last Year</button>
+      <button class="tab" data-days="0">All Time</button>
+    </div>
+  </div>
+  <div id="err"></div>
+
+  <!-- ============ STATE: UPLOAD ============ -->
+  <div id="stUpload" style="display:none">
+    <div class="drop load d4" id="drop">
+      <div class="ic">⇪</div>
+      <h4>Drag &amp; drop your transactions CSV</h4>
+      <p>Most banks let you export transactions as a CSV from your account activity page.</p>
+      <div class="or">or</div>
+      <button class="btn" id="browseBtn" type="button">Browse for a file</button>
+      <span style="display:inline-block;width:10px"></span>
+      <button class="btn" id="sampleBtn" type="button">Try with sample data</button>
+      <input type="file" id="fileInput" accept=".csv,.txt,text/csv,text/plain" style="display:none">
+    </div>
+    <div class="uperr" id="uperr"></div>
+    <div class="privacy"><b>Private by design</b> — your file is processed entirely in this browser tab. Nothing is uploaded, stored, or sent anywhere.</div>
+  </div>
+
+  <!-- ============ STATE: MAPPING ============ -->
+  <div id="stMap" style="display:none">
+    <div class="sec" style="margin-top:8px">
+      <div class="sec-head"><span class="sec-num">→</span><span class="sec-title">Quick check</span></div>
+      <div class="sec-sub">We matched your file's columns automatically — make sure this looks right, then generate.</div>
+      <div class="panel">
+        <div class="maperr" id="maperr"></div>
+        <div class="chips" id="mapchips"></div>
+        <div class="mapgrid" id="mapgrid"></div>
+        <details class="adv" id="advOpts"><summary>Advanced options — split debit / credit columns, balance</summary><div class="mapgrid" id="mapgrid2" style="margin-top:14px"></div></details>
+        <div class="mapmode" id="modeRow" style="display:none">
+          <span style="font-weight:650">Existing data:</span>
+          <label><input type="radio" name="upmode" value="replace" checked> Replace</label>
+          <label><input type="radio" name="upmode" value="append"> Append (duplicates skipped)</label>
+        </div>
+        <h3 style="margin-bottom:4px">Preview</h3><div class="psub">Your first rows — the highlighted columns are the ones we'll use</div>
+        <div style="overflow-x:auto"><table><thead id="pvhead"></thead><tbody id="pvbody"></tbody></table></div>
+        <div class="mapactions">
+          <button class="btn primary" id="genBtn">Generate dashboard</button>
+          <button class="btn" id="backBtn">← Back</button>
+          <span style="font-size:12px;color:var(--faint)" id="mapinfo"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ STATE: DECRYPTING ============ -->
+  <div id="stLoad" style="display:none">
+    <div class="decrypting">
+      <div class="big" id="decText">$000,000.00</div>
+      <div class="small">Decrypting your finances…</div>
+    </div>
+  </div>
+
+  <!-- ============ STATE: DASHBOARD ============ -->
+  <div id="stDash" style="display:none">
+  <div class="sec reveal" style="margin-top:8px">
+    <div class="sec-head"><span class="sec-num">01</span><span class="sec-title">Overview</span></div>
+    <div class="sec-sub">Click income or spending to inspect every transaction behind the number</div>
+    <div class="cards">
+      <div class="card" id="cardIn" style="cursor:pointer" title="Click to see every deposit and where it came from"><div class="label">Income →</div><div class="value green" id="cIn"></div><div class="detail" id="cInD"></div></div>
+      <div class="card" id="cardOut" style="cursor:pointer" title="Click to see every expense"><div class="label">Spending →</div><div class="value" id="cOut"></div><div class="detail" id="cOutD"></div></div>
+      <div class="card"><div class="label">Net Change</div><div class="value" id="cNet"></div><div class="detail" id="cNetD"></div></div>
+      <div class="card"><div class="label">Avg Monthly Spend</div><div class="value red" id="cAvg"></div><div class="detail" id="cAvgD"></div></div>
+    </div>
+  </div>
+
+  <div class="sec reveal">
+    <div class="sec-head"><span class="sec-num">02</span><span class="sec-title">✦ AI <span class="grad">Advisor</span></span></div>
+    <div class="sec-sub">Personalized insights from your spending patterns — recalculated for the selected period</div>
+    <div class="panel advisor">
+      <div id="advice"></div>
+      <div class="advnote">Generated automatically from transaction patterns. Informational only — not professional financial advice.</div>
+    </div>
+  </div>
+
+  <div class="sec reveal">
+    <div class="sec-head"><span class="sec-num">03</span><span class="sec-title">Where it goes</span></div>
+    <div class="sec-sub">Spending by category — click any slice or row to filter the ledger</div>
+    <div class="row">
+      <div class="panel" style="display:flex;flex-direction:column"><h3>Category share</h3><div class="psub">Share of total outflow</div><div class="donut-wrap" id="donut"></div></div>
+      <div class="panel"><h3>Breakdown</h3><div class="psub">Largest categories first</div><div class="catlist" id="catlist"></div></div>
+    </div>
+  </div>
+
+  <div class="sec reveal">
+    <div class="sec-head"><span class="sec-num">04</span><span class="sec-title">Flow &amp; habits</span></div>
+    <div class="sec-sub">Cash flow over time and the merchants that earn most of your money</div>
+    <div class="row">
+      <div class="panel">
+        <h3 id="mtitle">Cash flow</h3><div class="psub" id="msub">Income vs spending</div>
+        <div class="legend"><span><i style="background:var(--green)"></i>Income</span><span><i style="background:var(--v600)"></i>Spending</span></div>
+        <div class="mchart" id="monthly"></div>
+      </div>
+      <div class="panel"><h3>Top merchants</h3><div class="psub">By total spend — click to filter the ledger</div><div class="merchlist" id="merchlist"></div></div>
+    </div>
+  </div>
+
+  <div class="sec reveal">
+    <div class="sec-head"><span class="sec-num">05</span><span class="sec-title">Ledger</span></div>
+    <div class="sec-sub">Every transaction in the selected period — click a category tag to reassign it</div>
+    <div class="panel">
+      <div class="controls">
+        <select id="fCat"><option value="">All categories</option></select>
+        <select id="fMonth"><option value="">All months</option></select>
+        <select id="fFlow"><option value="">Money in &amp; out</option><option value="out">Spending only</option><option value="in">Income only</option></select>
+        <input type="text" id="fSearch" placeholder="Search transactions">
+      </div>
+      <div style="overflow-x:auto">
+      <table>
+        <thead><tr>
+          <th data-k="date">Date</th><th data-k="desc">Description</th><th data-k="cat">Category</th><th data-k="amt" class="amt">Amount</th><th data-k="bal" class="amt">Balance</th>
+        </tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+      </div>
+      <div class="morebox" id="morebox"></div>
+      <div class="count" id="count"></div>
+    </div>
+  </div>
+  </div><!-- /stDash -->
+
+  <!-- ============ STATE: PLANS ============ -->
+  <div id="stPlans" style="display:none">
+    <div class="sec" style="margin-top:8px">
+      <div class="sec-head"><span class="sec-num">$</span><span class="sec-title">Simple <span class="grad">Pricing</span></span></div>
+      <div class="sec-sub">Every plan starts with a 14-day free trial · cancel anytime in two clicks</div>
+      <div class="pricegrid">
+        <div class="pcard">
+          <div class="ptier">Personal</div>
+          <div class="pprice"><span class="grad">$3.99</span><span class="per"> /mo</span></div>
+          <div class="pdesc">Your money, decrypted. Everything in this dashboard, always current.</div>
+          <ul class="pfeat">
+            <li>1 bank connection, synced daily</li>
+            <li>Full dashboard &amp; cash-flow views</li>
+            <li>AI Advisor with savings targets</li>
+            <li>Unlimited transaction history</li>
+            <li>CSV import included</li>
+          </ul>
+          <button class="btn pbtn" data-plan="Personal">Start Personal</button>
+        </div>
+        <div class="pcard pop">
+          <div class="pbadge">Most popular</div>
+          <div class="ptier">Family</div>
+          <div class="pprice"><span class="grad">$10.99</span><span class="per"> /mo</span></div>
+          <div class="pdesc">One household, every account. Shared picture, private views.</div>
+          <ul class="pfeat">
+            <li>Up to 5 family members</li>
+            <li>Shared household dashboard</li>
+            <li>Private individual views</li>
+            <li>Budgets &amp; spending alerts</li>
+            <li>Everything in Personal</li>
+          </ul>
+          <button class="btn primary pbtn" data-plan="Family">Start Family</button>
+        </div>
+        <div class="pcard">
+          <div class="ptier">Enterprise</div>
+          <div class="pprice"><span class="grad">$24.99</span><span class="per"> /mo per seat</span></div>
+          <div class="pdesc">For advisors and teams managing money for many.</div>
+          <ul class="pfeat">
+            <li>Multi-client workspaces</li>
+            <li>SSO / SAML sign-in</li>
+            <li>API access &amp; white-label reports</li>
+            <li>Priority support</li>
+            <li>Everything in Family</li>
+          </ul>
+          <button class="btn pbtn" data-plan="Enterprise">Start Enterprise</button>
+        </div>
+      </div>
+      <div class="pricefoot">No card games — your data stays yours, and deleting it takes one click. Questions? <span style="color:var(--v600);font-weight:650">hello@osbornfinance.com</span></div>
+    </div>
+  </div>
+
+  <footer>
+    <div class="fb">Osborn <span class="grad">Finance</span></div>
+    <div class="fctl" id="fctl" style="display:none">
+      <a id="newUpload">New upload</a>
+      <label><input type="checkbox" id="rememberChk"> Remember on this device</label>
+      <a class="danger" id="clearData">Clear my data</a>
+    </div>
+    <div class="fn">100% in-browser · nothing leaves your computer · classifications are automatic and may need review</div>
+  </footer>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+window.onerror = function(msg){ var e=document.getElementById('err'); if(e){e.style.display='block'; e.textContent='Error: '+msg;} };
+
+/* ================= SAMPLE DATA ================= */
+const SAMPLE_CSV = "Date,Description,Amount,Balance\n06/10/2026,\"MCDONALDS F2241 SPRINGFIELD\",-14.16,3271.87\n06/09/2026,\"KROGER 347 SPRINGFIELD\",-85.11,3286.03\n06/08/2026,\"XFINITY INTERNET 800-934-6489\",-70.00,3371.14\n06/06/2026,\"TARGET T-2031 SPRINGFIELD\",-14.40,3441.14\n06/05/2026,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-45.55,3455.54\n06/05/2026,\"CITY OF SPRINGFIELD ELECTRIC UTILITY\",-97.04,3501.09\n06/05/2026,\"ACME LOGISTICS INC PAYROLL DIRECT DEP\",1415.20,3598.13\n06/04/2026,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-84.16,2182.93\n06/04/2026,\"TACO BELL 4655 SPRINGFIELD\",-14.84,2267.09\n06/03/2026,\"PLANET FITNESS CLUB FEES\",-24.99,2281.93\n06/02/2026,\"AMAZON MKTPL ACCDC5A AMZN.COM BILL\",-15.38,2306.92\n06/01/2026,\"WILLOW CREEK APARTMENTS RENT PMT\",-1150.00,2322.30\n05/31/2026,\"SHELL OIL 5744 SPRINGFIELD\",-36.44,3472.30\n05/31/2026,\"MCDONALDS F2241 SPRINGFIELD\",-11.34,3508.74\n05/29/2026,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-25.35,3520.08\n05/29/2026,\"CIRCLE K 4421 SPRINGFIELD\",-42.25,3545.43\n05/28/2026,\"TARGET T-2031 SPRINGFIELD\",-53.12,3587.68\n05/28/2026,\"INTEREST PAID\",0.40,3640.80\n05/27/2026,\"ROBINHOOD DEBITS\",-50.00,3640.40\n05/25/2026,\"DISCOVER E-PAYMENT\",-314.99,3690.40\n05/23/2026,\"TACO BELL 4655 SPRINGFIELD\",-12.29,4005.39\n05/22/2026,\"GEICO AUTO INSURANCE PREM\",-132.40,4017.68\n05/22/2026,\"CASEYS 2210 SPRINGFIELD\",-35.80,4150.08\n05/22/2026,\"ACME LOGISTICS INC PAYROLL DIRECT DEP\",1452.43,4185.88\n05/20/2026,\"AMAZON PRIME MEMBERSHIP AMZN.COM\",-14.99,2733.45\n05/19/2026,\"ALDI 68110 SPRINGFIELD\",-55.07,2748.44\n05/18/2026,\"TARGET T-2031 SPRINGFIELD\",-27.06,2803.51\n05/18/2026,\"TACO BELL 4655 SPRINGFIELD\",-14.17,2830.57\n05/17/2026,\"SPOTIFY USA SUBSCRIPTION\",-11.99,2844.74\n05/15/2026,\"WENDYS 0331 SPRINGFIELD\",-11.39,2856.73\n05/15/2026,\"NETFLIX.COM SUBSCRIPTION\",-15.49,2868.12\n05/14/2026,\"TARGET T-2031 SPRINGFIELD\",-38.75,2883.61\n05/13/2026,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-15.31,2922.36\n05/12/2026,\"VERIZON WIRELESS PAYMENT\",-84.12,2937.67\n05/10/2026,\"SHELL OIL 5744 SPRINGFIELD\",-47.09,3021.79\n05/10/2026,\"CVS PHARMACY 08043 SPRINGFIELD\",-9.78,3068.88\n05/09/2026,\"SUBWAY 31002 SPRINGFIELD\",-25.99,3078.66\n05/09/2026,\"SPORT CLIPS - IL502 SPRINGFIELD\",-28.00,3104.65\n05/08/2026,\"XFINITY INTERNET 800-934-6489\",-70.00,3132.65\n05/08/2026,\"ACME LOGISTICS INC PAYROLL DIRECT DEP\",1404.33,3202.65\n05/07/2026,\"STARBUCKS 08821 SPRINGFIELD\",-14.05,1798.32\n05/06/2026,\"STARBUCKS 08821 SPRINGFIELD\",-16.80,1812.37\n05/06/2026,\"KROGER 347 SPRINGFIELD\",-74.16,1829.17\n05/06/2026,\"AMAZON MKTPL 341E124 AMZN.COM BILL\",-55.52,1903.33\n05/05/2026,\"CITY OF SPRINGFIELD ELECTRIC UTILITY\",-83.30,1958.85\n05/05/2026,\"CIRCLE K 4421 SPRINGFIELD\",-26.98,2042.15\n05/03/2026,\"PLANET FITNESS CLUB FEES\",-24.99,2069.13\n05/02/2026,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-25.77,2094.12\n05/01/2026,\"WILLOW CREEK APARTMENTS RENT PMT\",-1150.00,2119.89\n05/01/2026,\"KROGER 347 SPRINGFIELD\",-77.67,3269.89\n04/30/2026,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-31.37,3347.56\n04/28/2026,\"SHELL OIL 5744 SPRINGFIELD\",-26.75,3378.93\n04/28/2026,\"INTEREST PAID\",0.67,3405.68\n04/27/2026,\"ROBINHOOD DEBITS\",-50.00,3405.01\n04/26/2026,\"WENDYS 0331 SPRINGFIELD\",-24.17,3455.01\n04/26/2026,\"VENMO PAYMENT 855-812-4430\",-51.02,3479.18\n04/26/2026,\"ATM WDL 1ST NATIONAL SPRINGFIELD\",-40.00,3530.20\n04/25/2026,\"DISCOVER E-PAYMENT\",-295.53,3570.20\n04/24/2026,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-29.25,3865.73\n04/24/2026,\"ACME LOGISTICS INC PAYROLL DIRECT DEP\",1415.42,3894.98\n04/23/2026,\"STARBUCKS 08821 SPRINGFIELD\",-11.65,2479.56\n04/22/2026,\"GEICO AUTO INSURANCE PREM\",-132.40,2491.21\n04/21/2026,\"STEAMGAMES.COM PURCHASE\",-10.10,2623.61\n04/21/2026,\"SHELL OIL 5744 SPRINGFIELD\",-34.81,2633.71\n04/20/2026,\"TACO BELL 4655 SPRINGFIELD\",-6.65,2668.52\n04/20/2026,\"AMAZON PRIME MEMBERSHIP AMZN.COM\",-14.99,2675.17\n04/20/2026,\"ALDI 68110 SPRINGFIELD\",-66.82,2690.16\n04/19/2026,\"ALDI 68110 SPRINGFIELD\",-26.43,2756.98\n04/17/2026,\"SPOTIFY USA SUBSCRIPTION\",-11.99,2783.41\n04/17/2026,\"ALDI 68110 SPRINGFIELD\",-55.37,2795.40\n04/16/2026,\"AMAZON MKTPL 5EAD352 AMZN.COM BILL\",-40.45,2850.77\n04/15/2026,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-75.45,2891.22\n04/15/2026,\"STARBUCKS 08821 SPRINGFIELD\",-18.42,2966.67\n04/15/2026,\"NETFLIX.COM SUBSCRIPTION\",-15.49,2985.09\n04/13/2026,\"CIRCLE K 4421 SPRINGFIELD\",-44.64,3000.58\n04/12/2026,\"VERIZON WIRELESS PAYMENT\",-84.12,3045.22\n04/10/2026,\"KROGER 347 SPRINGFIELD\",-51.65,3129.34\n04/10/2026,\"ACME LOGISTICS INC PAYROLL DIRECT DEP\",1436.89,3180.99\n04/08/2026,\"XFINITY INTERNET 800-934-6489\",-70.00,1744.10\n04/08/2026,\"AMAZON MKTPL 55EABD5 AMZN.COM BILL\",-13.00,1814.10\n04/07/2026,\"KROGER 347 SPRINGFIELD\",-51.73,1827.10\n04/07/2026,\"CIRCLE K 4421 SPRINGFIELD\",-25.78,1878.83\n04/06/2026,\"SUBWAY 31002 SPRINGFIELD\",-7.70,1904.61\n04/06/2026,\"CVS PHARMACY 08043 SPRINGFIELD\",-34.76,1912.31\n04/05/2026,\"KROGER 347 SPRINGFIELD\",-92.14,1947.07\n04/05/2026,\"CITY OF SPRINGFIELD ELECTRIC UTILITY\",-133.82,2039.21\n04/04/2026,\"WENDYS 0331 SPRINGFIELD\",-9.03,2173.03\n04/03/2026,\"PLANET FITNESS CLUB FEES\",-24.99,2182.06\n04/02/2026,\"CHIPOTLE 1187 SPRINGFIELD\",-23.37,2207.05\n04/01/2026,\"WILLOW CREEK APARTMENTS RENT PMT\",-1150.00,2230.42\n03/29/2026,\"KROGER 347 SPRINGFIELD\",-41.95,3380.42\n03/28/2026,\"TACO BELL 4655 SPRINGFIELD\",-23.45,3422.37\n03/28/2026,\"SHELL OIL 5744 SPRINGFIELD\",-37.28,3445.82\n03/28/2026,\"KROGER 347 SPRINGFIELD\",-70.77,3483.10\n03/28/2026,\"KROGER 347 SPRINGFIELD\",-81.11,3553.87\n03/28/2026,\"INTEREST PAID\",0.46,3634.98\n03/27/2026,\"ROBINHOOD DEBITS\",-50.00,3634.52\n03/27/2026,\"ACME LOGISTICS INC PAYROLL DIRECT DEP\",1443.35,3684.52\n03/25/2026,\"DISCOVER E-PAYMENT\",-190.28,2241.17\n03/24/2026,\"WENDYS 0331 SPRINGFIELD\",-11.53,2431.45\n03/24/2026,\"STEAMGAMES.COM PURCHASE\",-22.97,2442.98\n03/24/2026,\"KROGER 347 SPRINGFIELD\",-94.72,2465.95\n03/23/2026,\"SHELL OIL 5744 SPRINGFIELD\",-26.87,2560.67\n03/23/2026,\"KROGER 347 SPRINGFIELD\",-32.87,2587.54\n03/23/2026,\"KROGER 347 SPRINGFIELD\",-70.34,2620.41\n03/22/2026,\"WENDYS 0331 SPRINGFIELD\",-9.83,2690.75\n03/22/2026,\"GEICO AUTO INSURANCE PREM\",-132.40,2700.58\n03/21/2026,\"AMAZON MKTPL BAE52C1 AMZN.COM BILL\",-83.75,2832.98\n03/20/2026,\"CVS PHARMACY 08043 SPRINGFIELD\",-33.24,2916.73\n03/20/2026,\"AMAZON PRIME MEMBERSHIP AMZN.COM\",-14.99,2949.97\n03/19/2026,\"ALDI 68110 SPRINGFIELD\",-51.52,2964.96\n03/18/2026,\"WENDYS 0331 SPRINGFIELD\",-13.38,3016.48\n03/17/2026,\"TARGET T-2031 SPRINGFIELD\",-58.08,3029.86\n03/17/2026,\"TARGET T-2031 SPRINGFIELD\",-77.81,3087.94\n03/17/2026,\"SPOTIFY USA SUBSCRIPTION\",-11.99,3165.75\n03/17/2026,\"SHELL OIL 5744 SPRINGFIELD\",-40.60,3177.74\n03/15/2026,\"VENMO PAYMENT 855-812-4430\",-57.57,3218.34\n03/15/2026,\"NETFLIX.COM SUBSCRIPTION\",-15.49,3275.91\n03/13/2026,\"ACME LOGISTICS INC PAYROLL DIRECT DEP\",1395.39,3291.40\n03/12/2026,\"VERIZON WIRELESS PAYMENT\",-84.12,1896.01\n03/11/2026,\"AMAZON MKTPL 51B3225 AMZN.COM BILL\",-64.02,1980.13\n03/09/2026,\"WENDYS 0331 SPRINGFIELD\",-17.12,2044.15\n03/09/2026,\"CIRCLE K 4421 SPRINGFIELD\",-30.71,2061.27\n03/08/2026,\"XFINITY INTERNET 800-934-6489\",-70.00,2091.98\n03/08/2026,\"SUBWAY 31002 SPRINGFIELD\",-7.71,2161.98\n03/08/2026,\"KROGER 347 SPRINGFIELD\",-52.47,2169.69\n03/07/2026,\"KROGER 347 SPRINGFIELD\",-53.03,2222.16\n03/05/2026,\"CITY OF SPRINGFIELD ELECTRIC UTILITY\",-96.43,2275.19\n03/04/2026,\"TACO BELL 4655 SPRINGFIELD\",-18.21,2371.62\n03/04/2026,\"KROGER 347 SPRINGFIELD\",-79.08,2389.83\n03/03/2026,\"TARGET T-2031 SPRINGFIELD\",-48.15,2468.91\n03/03/2026,\"PLANET FITNESS CLUB FEES\",-24.99,2517.06\n03/02/2026,\"SHELL OIL 5744 SPRINGFIELD\",-45.16,2542.05\n03/02/2026,\"KROGER 347 SPRINGFIELD\",-82.69,2587.21\n03/01/2026,\"WILLOW CREEK APARTMENTS RENT PMT\",-1150.00,2669.90\n02/28/2026,\"INTEREST PAID\",0.52,3819.90\n02/27/2026,\"ROBINHOOD DEBITS\",-50.00,3819.38\n02/27/2026,\"ACME LOGISTICS INC PAYROLL DIRECT DEP\",1443.57,3869.38\n02/26/2026,\"TACO BELL 4655 SPRINGFIELD\",-9.06,2425.81\n02/26/2026,\"CHIPOTLE 1187 SPRINGFIELD\",-16.43,2434.87\n02/25/2026,\"DISCOVER E-PAYMENT\",-292.56,2451.30\n02/24/2026,\"SHELL OIL 5744 SPRINGFIELD\",-47.06,2743.86\n02/23/2026,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-56.22,2790.92\n02/23/2026,\"CVS PHARMACY 08043 SPRINGFIELD\",-33.47,2847.14\n02/23/2026,\"AMAZON MKTPL 455E24A AMZN.COM BILL\",-51.39,2880.61\n02/22/2026,\"GEICO AUTO INSURANCE PREM\",-132.40,2932.00\n02/21/2026,\"SPORT CLIPS - IL502 SPRINGFIELD\",-28.00,3064.40\n02/21/2026,\"KROGER 347 SPRINGFIELD\",-53.99,3092.40\n02/21/2026,\"KROGER 347 SPRINGFIELD\",-82.51,3146.39\n02/20/2026,\"IRS TREAS 310 TAX REF\",742.00,3228.90\n02/20/2026,\"AMAZON PRIME MEMBERSHIP AMZN.COM\",-14.99,2486.90\n02/18/2026,\"WENDYS 0331 SPRINGFIELD\",-22.11,2501.89\n02/17/2026,\"TARGET T-2031 SPRINGFIELD\",-90.14,2524.00\n02/17/2026,\"SPOTIFY USA SUBSCRIPTION\",-11.99,2614.14\n02/17/2026,\"AMAZON MKTPL 5BEECA4 AMZN.COM BILL\",-26.82,2626.13\n02/15/2026,\"NETFLIX.COM SUBSCRIPTION\",-15.49,2652.95\n02/14/2026,\"VENMO PAYMENT 855-812-4430\",-68.46,2668.44\n02/14/2026,\"SHELL OIL 5744 SPRINGFIELD\",-40.73,2736.90\n02/14/2026,\"ALDI 68110 SPRINGFIELD\",-61.14,2777.63\n02/13/2026,\"MCDONALDS F2241 SPRINGFIELD\",-22.39,2838.77\n02/13/2026,\"ACME LOGISTICS INC PAYROLL DIRECT DEP\",1430.36,2861.16\n02/12/2026,\"VERIZON WIRELESS PAYMENT\",-84.12,1430.80\n02/12/2026,\"TARGET T-2031 SPRINGFIELD\",-33.27,1514.92\n02/11/2026,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-90.66,1548.19\n02/11/2026,\"CASEYS 2210 SPRINGFIELD\",-47.13,1638.85\n02/09/2026,\"UBER TRIP HELP.UBER.COM\",-21.84,1685.98\n02/08/2026,\"XFINITY INTERNET 800-934-6489\",-70.00,1707.82\n02/08/2026,\"ALDI 68110 SPRINGFIELD\",-22.48,1777.82\n02/07/2026,\"STARBUCKS 08821 SPRINGFIELD\",-17.57,1800.30\n02/06/2026,\"MCDONALDS F2241 SPRINGFIELD\",-6.62,1817.87\n02/05/2026,\"CITY OF SPRINGFIELD ELECTRIC UTILITY\",-90.35,1824.49\n02/03/2026,\"PLANET FITNESS CLUB FEES\",-24.99,1914.84\n02/02/2026,\"TARGET T-2031 SPRINGFIELD\",-81.30,1939.83\n02/01/2026,\"WILLOW CREEK APARTMENTS RENT PMT\",-1150.00,2021.13\n02/01/2026,\"CIRCLE K 4421 SPRINGFIELD\",-39.60,3171.13\n02/01/2026,\"CHIPOTLE 1187 SPRINGFIELD\",-22.78,3210.73\n01/31/2026,\"TARGET T-2031 SPRINGFIELD\",-74.17,3233.51\n01/30/2026,\"STARBUCKS 08821 SPRINGFIELD\",-23.59,3307.68\n01/30/2026,\"ALDI 68110 SPRINGFIELD\",-50.32,3331.27\n01/30/2026,\"ACME LOGISTICS INC PAYROLL DIRECT DEP\",1408.23,3381.59\n01/28/2026,\"INTEREST PAID\",0.36,1973.36\n01/27/2026,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-61.13,1973.00\n01/27/2026,\"VENMO PAYMENT 855-812-4430\",-50.06,2034.13\n01/27/2026,\"ROBINHOOD DEBITS\",-50.00,2084.19\n01/26/2026,\"CIRCLE K 4421 SPRINGFIELD\",-29.08,2134.19\n01/26/2026,\"AMAZON MKTPL 4D2DDD4 AMZN.COM BILL\",-61.08,2163.27\n01/25/2026,\"DISCOVER E-PAYMENT\",-195.87,2224.35\n01/25/2026,\"CVS PHARMACY 08043 SPRINGFIELD\",-22.13,2420.22\n01/24/2026,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-65.35,2442.35\n01/23/2026,\"CASEYS 2210 SPRINGFIELD\",-33.70,2507.70\n01/22/2026,\"GEICO AUTO INSURANCE PREM\",-132.40,2541.40\n01/20/2026,\"TARGET T-2031 SPRINGFIELD\",-14.41,2673.80\n01/20/2026,\"AMAZON PRIME MEMBERSHIP AMZN.COM\",-14.99,2688.21\n01/20/2026,\"ALDI 68110 SPRINGFIELD\",-30.21,2703.20\n01/18/2026,\"TACO BELL 4655 SPRINGFIELD\",-25.61,2733.41\n01/17/2026,\"SPOTIFY USA SUBSCRIPTION\",-11.99,2759.02\n01/17/2026,\"BEST BUY 00234 TV PURCHASE SPRINGFIELD\",-1289.99,2771.01\n01/16/2026,\"TARGET T-2031 SPRINGFIELD\",-60.48,4061.00\n01/16/2026,\"STARBUCKS 08821 SPRINGFIELD\",-13.80,4121.48\n01/16/2026,\"ACME LOGISTICS INC PAYROLL DIRECT DEP\",1427.70,4135.28\n01/15/2026,\"NETFLIX.COM SUBSCRIPTION\",-15.49,2707.58\n01/13/2026,\"CASEYS 2210 SPRINGFIELD\",-35.45,2723.07\n01/12/2026,\"VERIZON WIRELESS PAYMENT\",-84.12,2758.52\n01/11/2026,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-81.13,2842.64\n01/08/2026,\"XFINITY INTERNET 800-934-6489\",-70.00,2923.77\n01/08/2026,\"SHELL OIL 5744 SPRINGFIELD\",-29.13,2993.77\n01/06/2026,\"AMAZON MKTPL D5D2C34 AMZN.COM BILL\",-16.12,3022.90\n01/05/2026,\"TACO BELL 4655 SPRINGFIELD\",-16.85,3039.02\n01/05/2026,\"KROGER 347 SPRINGFIELD\",-38.54,3055.87\n01/05/2026,\"CITY OF SPRINGFIELD ELECTRIC UTILITY\",-77.27,3094.41\n01/04/2026,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-24.52,3171.68\n01/03/2026,\"PLANET FITNESS CLUB FEES\",-24.99,3196.20\n01/02/2026,\"TARGET T-2031 SPRINGFIELD\",-87.27,3221.19\n01/02/2026,\"ACME LOGISTICS INC PAYROLL DIRECT DEP\",1433.99,3308.46\n01/01/2026,\"WILLOW CREEK APARTMENTS RENT PMT\",-1150.00,1874.47\n01/01/2026,\"TACO BELL 4655 SPRINGFIELD\",-10.78,3024.47\n12/30/2025,\"TARGET T-2031 SPRINGFIELD\",-33.51,3035.25\n12/29/2025,\"CASEYS 2210 SPRINGFIELD\",-42.38,3068.76\n12/28/2025,\"TARGET T-2031 SPRINGFIELD\",-73.72,3111.14\n12/28/2025,\"INTEREST PAID\",0.47,3184.86\n12/27/2025,\"TACO BELL 4655 SPRINGFIELD\",-20.27,3184.39\n12/27/2025,\"ROBINHOOD DEBITS\",-50.00,3204.66\n12/26/2025,\"SUBWAY 31002 SPRINGFIELD\",-20.39,3254.66\n12/25/2025,\"DISCOVER E-PAYMENT\",-194.70,3275.05\n12/24/2025,\"CASEYS 2210 SPRINGFIELD\",-38.29,3469.75\n12/23/2025,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-23.07,3508.04\n12/22/2025,\"GEICO AUTO INSURANCE PREM\",-132.40,3531.11\n12/20/2025,\"TARGET T-2031 SPRINGFIELD\",-58.26,3663.51\n12/20/2025,\"AMAZON PRIME MEMBERSHIP AMZN.COM\",-14.99,3721.77\n12/19/2025,\"MCDONALDS F2241 SPRINGFIELD\",-14.50,3736.76\n12/19/2025,\"ACME LOGISTICS INC PAYROLL DIRECT DEP\",1406.93,3751.26\n12/18/2025,\"ALDI 68110 SPRINGFIELD\",-69.80,2344.33\n12/17/2025,\"SPOTIFY USA SUBSCRIPTION\",-11.99,2414.13\n12/16/2025,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-46.40,2426.12\n12/15/2025,\"NETFLIX.COM SUBSCRIPTION\",-15.49,2472.52\n12/14/2025,\"SHELL OIL 5744 SPRINGFIELD\",-39.75,2488.01\n12/12/2025,\"VERIZON WIRELESS PAYMENT\",-84.12,2527.76\n12/11/2025,\"ALDI 68110 SPRINGFIELD\",-19.04,2611.88\n12/09/2025,\"AMAZON MKTPL 22BDAE2 AMZN.COM BILL\",-9.64,2630.92\n12/08/2025,\"XFINITY INTERNET 800-934-6489\",-70.00,2640.56\n12/08/2025,\"CASEYS 2210 SPRINGFIELD\",-29.39,2710.56\n12/06/2025,\"KROGER 347 SPRINGFIELD\",-79.93,2739.95\n12/06/2025,\"CHIPOTLE 1187 SPRINGFIELD\",-6.92,2819.88\n12/05/2025,\"CITY OF SPRINGFIELD ELECTRIC UTILITY\",-75.02,2826.80\n12/05/2025,\"ACME LOGISTICS INC PAYROLL DIRECT DEP\",1396.59,2901.82\n12/04/2025,\"TACO BELL 4655 SPRINGFIELD\",-10.27,1505.23\n12/04/2025,\"CASEYS 2210 SPRINGFIELD\",-31.73,1515.50\n12/03/2025,\"TARGET T-2031 SPRINGFIELD\",-81.20,1547.23\n12/03/2025,\"PLANET FITNESS CLUB FEES\",-24.99,1628.43\n12/03/2025,\"ALDI 68110 SPRINGFIELD\",-59.24,1653.42\n12/01/2025,\"WILLOW CREEK APARTMENTS RENT PMT\",-1150.00,1712.66\n12/01/2025,\"KROGER 347 SPRINGFIELD\",-29.45,2862.66\n11/28/2025,\"INTEREST PAID\",0.72,2892.11\n11/27/2025,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-86.70,2891.39\n11/27/2025,\"TACO BELL 4655 SPRINGFIELD\",-24.81,2978.09\n11/27/2025,\"ROBINHOOD DEBITS\",-50.00,3002.90\n11/26/2025,\"STARBUCKS 08821 SPRINGFIELD\",-8.55,3052.90\n11/26/2025,\"KROGER 347 SPRINGFIELD\",-38.05,3061.45\n11/25/2025,\"DISCOVER E-PAYMENT\",-278.56,3099.50\n11/25/2025,\"CASEYS 2210 SPRINGFIELD\",-31.83,3378.06\n11/24/2025,\"ALDI 68110 SPRINGFIELD\",-47.80,3409.89\n11/22/2025,\"GEICO AUTO INSURANCE PREM\",-132.40,3457.69\n11/21/2025,\"ACME LOGISTICS INC PAYROLL DIRECT DEP\",1425.32,3590.09\n11/20/2025,\"KROGER 347 SPRINGFIELD\",-77.27,2164.77\n11/20/2025,\"AMAZON PRIME MEMBERSHIP AMZN.COM\",-14.99,2242.04\n11/17/2025,\"SPOTIFY USA SUBSCRIPTION\",-11.99,2257.03\n11/17/2025,\"CHIPOTLE 1187 SPRINGFIELD\",-6.89,2269.02\n11/16/2025,\"SPORT CLIPS - IL502 SPRINGFIELD\",-28.00,2275.91\n11/16/2025,\"AMAZON MKTPL DCDECB3 AMZN.COM BILL\",-14.84,2303.91\n11/15/2025,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-61.52,2318.75\n11/15/2025,\"VENMO CASHOUT 855-812-4430\",44.52,2380.27\n11/15/2025,\"TACO BELL 4655 SPRINGFIELD\",-16.40,2335.75\n11/15/2025,\"NETFLIX.COM SUBSCRIPTION\",-15.49,2352.15\n11/15/2025,\"CASEYS 2210 SPRINGFIELD\",-33.24,2367.64\n11/14/2025,\"ATM WDL 1ST NATIONAL SPRINGFIELD\",-40.00,2400.88\n11/13/2025,\"TARGET T-2031 SPRINGFIELD\",-93.44,2440.88\n11/12/2025,\"VERIZON WIRELESS PAYMENT\",-84.12,2534.32\n11/12/2025,\"CHIPOTLE 1187 SPRINGFIELD\",-25.25,2618.44\n11/10/2025,\"KROGER 347 SPRINGFIELD\",-65.24,2643.69\n11/08/2025,\"XFINITY INTERNET 800-934-6489\",-70.00,2708.93\n11/08/2025,\"SHELL OIL 5744 SPRINGFIELD\",-45.05,2778.93\n11/07/2025,\"ACME LOGISTICS INC PAYROLL DIRECT DEP\",1408.12,2823.98\n11/05/2025,\"CITY OF SPRINGFIELD ELECTRIC UTILITY\",-128.87,1415.86\n11/03/2025,\"TARGET T-2031 SPRINGFIELD\",-37.33,1544.73\n11/03/2025,\"TACO BELL 4655 SPRINGFIELD\",-11.57,1582.06\n11/03/2025,\"PLANET FITNESS CLUB FEES\",-24.99,1593.63\n11/02/2025,\"TARGET T-2031 SPRINGFIELD\",-28.56,1618.62\n11/02/2025,\"SHELL OIL 5744 SPRINGFIELD\",-24.57,1647.18\n11/01/2025,\"WILLOW CREEK APARTMENTS RENT PMT\",-1150.00,1671.75\n10/31/2025,\"KROGER 347 SPRINGFIELD\",-89.26,2821.75\n10/31/2025,\"CASEYS 2210 SPRINGFIELD\",-29.96,2911.01\n10/28/2025,\"INTEREST PAID\",0.67,2940.97\n10/27/2025,\"ROBINHOOD DEBITS\",-50.00,2940.30\n10/26/2025,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-73.13,2990.30\n10/25/2025,\"WENDYS 0331 SPRINGFIELD\",-13.65,3063.43\n10/25/2025,\"DISCOVER E-PAYMENT\",-339.06,3077.08\n10/24/2025,\"CHIPOTLE 1187 SPRINGFIELD\",-22.22,3416.14\n10/24/2025,\"ACME LOGISTICS INC PAYROLL DIRECT DEP\",1396.79,3438.36\n10/23/2025,\"CVS PHARMACY 08043 SPRINGFIELD\",-34.95,2041.57\n10/22/2025,\"GEICO AUTO INSURANCE PREM\",-132.40,2076.52\n10/22/2025,\"CIRCLE K 4421 SPRINGFIELD\",-41.99,2208.92\n10/20/2025,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-76.75,2250.91\n10/20/2025,\"AMAZON PRIME MEMBERSHIP AMZN.COM\",-14.99,2327.66\n10/19/2025,\"KROGER 347 SPRINGFIELD\",-68.61,2342.65\n10/17/2025,\"SPOTIFY USA SUBSCRIPTION\",-11.99,2411.26\n10/16/2025,\"AMAZON MKTPL 1BA2A2C AMZN.COM BILL\",-28.29,2423.25\n10/15/2025,\"NETFLIX.COM SUBSCRIPTION\",-15.49,2451.54\n10/15/2025,\"ALDI 68110 SPRINGFIELD\",-14.99,2467.03\n10/13/2025,\"STARBUCKS 08821 SPRINGFIELD\",-23.98,2482.02\n10/12/2025,\"VERIZON WIRELESS PAYMENT\",-84.12,2506.00\n10/12/2025,\"CASEYS 2210 SPRINGFIELD\",-34.31,2590.12\n10/11/2025,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-90.44,2624.43\n10/10/2025,\"ACME LOGISTICS INC PAYROLL DIRECT DEP\",1420.32,2714.87\n10/09/2025,\"SUBWAY 31002 SPRINGFIELD\",-14.55,1294.55\n10/08/2025,\"XFINITY INTERNET 800-934-6489\",-70.00,1309.10\n10/06/2025,\"TARGET T-2031 SPRINGFIELD\",-87.14,1379.10\n10/06/2025,\"CASEYS 2210 SPRINGFIELD\",-27.88,1466.24\n10/05/2025,\"CITY OF SPRINGFIELD ELECTRIC UTILITY\",-108.43,1494.12\n10/04/2025,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-64.65,1602.55\n10/04/2025,\"VENMO PAYMENT 855-812-4430\",-54.62,1667.20\n10/04/2025,\"KROGER 347 SPRINGFIELD\",-12.29,1721.82\n10/03/2025,\"PLANET FITNESS CLUB FEES\",-24.99,1734.11\n10/02/2025,\"WENDYS 0331 SPRINGFIELD\",-23.06,1759.10\n10/02/2025,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-79.82,1782.16\n10/02/2025,\"KROGER 347 SPRINGFIELD\",-20.60,1861.98\n10/02/2025,\"CHIPOTLE 1187 SPRINGFIELD\",-12.86,1882.58\n10/01/2025,\"WILLOW CREEK APARTMENTS RENT PMT\",-1150.00,1895.44\n09/29/2025,\"ALDI 68110 SPRINGFIELD\",-21.58,3045.44\n09/28/2025,\"INTEREST PAID\",0.53,3067.02\n09/28/2025,\"CASEYS 2210 SPRINGFIELD\",-30.54,3066.49\n09/27/2025,\"ROBINHOOD DEBITS\",-50.00,3097.03\n09/26/2025,\"ACME LOGISTICS INC PAYROLL DIRECT DEP\",1400.22,3147.03\n09/25/2025,\"SUBWAY 31002 SPRINGFIELD\",-12.05,1746.81\n09/25/2025,\"DISCOVER E-PAYMENT\",-373.55,1758.86\n09/24/2025,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-29.69,2132.41\n09/22/2025,\"VENMO CASHOUT 855-812-4430\",44.22,2162.10\n09/22/2025,\"STEAMGAMES.COM PURCHASE\",-34.64,2117.88\n09/22/2025,\"SHELL OIL 5744 SPRINGFIELD\",-30.84,2152.52\n09/22/2025,\"GEICO AUTO INSURANCE PREM\",-132.40,2183.36\n09/21/2025,\"KROGER 347 SPRINGFIELD\",-89.46,2315.76\n09/20/2025,\"AMAZON PRIME MEMBERSHIP AMZN.COM\",-14.99,2405.22\n09/19/2025,\"VENMO PAYMENT 855-812-4430\",-17.33,2420.21\n09/18/2025,\"ALDI 68110 SPRINGFIELD\",-65.58,2437.54\n09/17/2025,\"TACO BELL 4655 SPRINGFIELD\",-25.97,2503.12\n09/17/2025,\"SPOTIFY USA SUBSCRIPTION\",-11.99,2529.09\n09/15/2025,\"TARGET T-2031 SPRINGFIELD\",-89.11,2541.08\n09/15/2025,\"NETFLIX.COM SUBSCRIPTION\",-15.49,2630.19\n09/12/2025,\"VERIZON WIRELESS PAYMENT\",-84.12,2645.68\n09/12/2025,\"AMAZON MKTPL D2A2D35 AMZN.COM BILL\",-58.52,2729.80\n09/12/2025,\"ACME LOGISTICS INC PAYROLL DIRECT DEP\",1448.53,2788.32\n09/11/2025,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-83.53,1339.79\n09/11/2025,\"CIRCLE K 4421 SPRINGFIELD\",-38.01,1423.32\n09/10/2025,\"ALDI 68110 SPRINGFIELD\",-61.35,1461.33\n09/09/2025,\"UBER TRIP HELP.UBER.COM\",-28.18,1522.68\n09/08/2025,\"XFINITY INTERNET 800-934-6489\",-70.00,1550.86\n09/08/2025,\"WENDYS 0331 SPRINGFIELD\",-10.77,1620.86\n09/08/2025,\"STARBUCKS 08821 SPRINGFIELD\",-10.09,1631.63\n09/06/2025,\"TARGET T-2031 SPRINGFIELD\",-90.15,1641.72\n09/05/2025,\"MCDONALDS F2241 SPRINGFIELD\",-9.72,1731.87\n09/05/2025,\"CITY OF SPRINGFIELD ELECTRIC UTILITY\",-107.39,1741.59\n09/05/2025,\"AMAZON MKTPL 3C4CD1C AMZN.COM BILL\",-85.57,1848.98\n09/04/2025,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-38.03,1934.55\n09/03/2025,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-51.57,1972.58\n09/03/2025,\"PLANET FITNESS CLUB FEES\",-24.99,2024.15\n09/01/2025,\"WILLOW CREEK APARTMENTS RENT PMT\",-1150.00,2049.14\n08/30/2025,\"CHIPOTLE 1187 SPRINGFIELD\",-25.22,3199.14\n08/29/2025,\"ACME LOGISTICS INC PAYROLL DIRECT DEP\",1435.60,3224.36\n08/28/2025,\"SUBWAY 31002 SPRINGFIELD\",-20.37,1788.76\n08/28/2025,\"INTEREST PAID\",0.74,1809.13\n08/27/2025,\"ROBINHOOD DEBITS\",-50.00,1808.39\n08/26/2025,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-34.01,1858.39\n08/25/2025,\"DISCOVER E-PAYMENT\",-333.71,1892.40\n08/25/2025,\"CIRCLE K 4421 SPRINGFIELD\",-34.15,2226.11\n08/24/2025,\"CHIPOTLE 1187 SPRINGFIELD\",-11.93,2260.26\n08/23/2025,\"TARGET T-2031 SPRINGFIELD\",-25.66,2272.19\n08/22/2025,\"TARGET T-2031 SPRINGFIELD\",-83.49,2297.85\n08/22/2025,\"GEICO AUTO INSURANCE PREM\",-132.40,2381.34\n08/20/2025,\"AMAZON PRIME MEMBERSHIP AMZN.COM\",-14.99,2513.74\n08/19/2025,\"CHIPOTLE 1187 SPRINGFIELD\",-15.71,2528.73\n08/19/2025,\"AMAZON MKTPL C2425E5 AMZN.COM BILL\",-27.87,2544.44\n08/18/2025,\"UBER TRIP HELP.UBER.COM\",-33.20,2572.31\n08/17/2025,\"SPOTIFY USA SUBSCRIPTION\",-11.99,2605.51\n08/16/2025,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-66.13,2617.50\n08/16/2025,\"SHELL OIL 5744 SPRINGFIELD\",-46.23,2683.63\n08/15/2025,\"NETFLIX.COM SUBSCRIPTION\",-15.49,2729.86\n08/15/2025,\"KROGER 347 SPRINGFIELD\",-83.52,2745.35\n08/15/2025,\"ACME LOGISTICS INC PAYROLL DIRECT DEP\",1439.19,2828.87\n08/14/2025,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-66.24,1389.68\n08/14/2025,\"AMAZON MKTPL B4A44E2 AMZN.COM BILL\",-61.43,1455.92\n08/13/2025,\"SHELL OIL 5744 SPRINGFIELD\",-34.77,1517.35\n08/12/2025,\"VERIZON WIRELESS PAYMENT\",-84.12,1552.12\n08/11/2025,\"CHIPOTLE 1187 SPRINGFIELD\",-15.25,1636.24\n08/09/2025,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-45.42,1651.49\n08/09/2025,\"SPORT CLIPS - IL502 SPRINGFIELD\",-28.00,1696.91\n08/08/2025,\"XFINITY INTERNET 800-934-6489\",-70.00,1724.91\n08/05/2025,\"STARBUCKS 08821 SPRINGFIELD\",-14.22,1794.91\n08/05/2025,\"CITY OF SPRINGFIELD ELECTRIC UTILITY\",-111.85,1809.13\n08/05/2025,\"ATM WDL 1ST NATIONAL SPRINGFIELD\",-40.00,1920.98\n08/03/2025,\"TARGET T-2031 SPRINGFIELD\",-56.76,1960.98\n08/03/2025,\"TARGET T-2031 SPRINGFIELD\",-77.12,2017.74\n08/03/2025,\"PLANET FITNESS CLUB FEES\",-24.99,2094.86\n08/02/2025,\"SHELL OIL 5744 SPRINGFIELD\",-26.33,2119.85\n08/01/2025,\"WILLOW CREEK APARTMENTS RENT PMT\",-1150.00,2146.18\n08/01/2025,\"ACME LOGISTICS INC PAYROLL DIRECT DEP\",1408.39,3296.18\n07/30/2025,\"ALDI 68110 SPRINGFIELD\",-30.28,1887.79\n07/28/2025,\"INTEREST PAID\",0.81,1918.07\n07/27/2025,\"ROBINHOOD DEBITS\",-50.00,1917.26\n07/27/2025,\"CVS PHARMACY 08043 SPRINGFIELD\",-25.26,1967.26\n07/26/2025,\"STARBUCKS 08821 SPRINGFIELD\",-16.28,1992.52\n07/26/2025,\"KROGER 347 SPRINGFIELD\",-60.83,2008.80\n07/26/2025,\"CASEYS 2210 SPRINGFIELD\",-29.49,2069.63\n07/25/2025,\"DISCOVER E-PAYMENT\",-163.21,2099.12\n07/24/2025,\"ALDI 68110 SPRINGFIELD\",-37.87,2262.33\n07/23/2025,\"TARGET T-2031 SPRINGFIELD\",-25.71,2300.20\n07/22/2025,\"STARBUCKS 08821 SPRINGFIELD\",-23.99,2325.91\n07/22/2025,\"GEICO AUTO INSURANCE PREM\",-132.40,2349.90\n07/20/2025,\"TARGET T-2031 SPRINGFIELD\",-89.10,2482.30\n07/20/2025,\"AMAZON PRIME MEMBERSHIP AMZN.COM\",-14.99,2571.40\n07/19/2025,\"TACO BELL 4655 SPRINGFIELD\",-10.96,2586.39\n07/18/2025,\"SUBWAY 31002 SPRINGFIELD\",-8.52,2597.35\n07/18/2025,\"ACME LOGISTICS INC PAYROLL DIRECT DEP\",1411.50,2605.87\n07/17/2025,\"SPOTIFY USA SUBSCRIPTION\",-11.99,1194.37\n07/16/2025,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-38.90,1206.36\n07/16/2025,\"AMAZON MKTPL 3253EEB AMZN.COM BILL\",-71.41,1245.26\n07/15/2025,\"NETFLIX.COM SUBSCRIPTION\",-15.49,1316.67\n07/13/2025,\"KROGER 347 SPRINGFIELD\",-16.81,1332.16\n07/12/2025,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-89.12,1348.97\n07/12/2025,\"VERIZON WIRELESS PAYMENT\",-84.12,1438.09\n07/12/2025,\"SHELL OIL 5744 SPRINGFIELD\",-41.57,1522.21\n07/11/2025,\"VENMO CASHOUT 855-812-4430\",51.87,1563.78\n07/11/2025,\"STARBUCKS 08821 SPRINGFIELD\",-9.23,1511.91\n07/11/2025,\"SHELL OIL 5744 SPRINGFIELD\",-39.01,1521.14\n07/09/2025,\"SUBWAY 31002 SPRINGFIELD\",-9.98,1560.15\n07/09/2025,\"KROGER 347 SPRINGFIELD\",-75.24,1570.13\n07/08/2025,\"XFINITY INTERNET 800-934-6489\",-70.00,1645.37\n07/08/2025,\"ALDI 68110 SPRINGFIELD\",-12.27,1715.37\n07/05/2025,\"KROGER 347 SPRINGFIELD\",-36.36,1727.64\n07/05/2025,\"CITY OF SPRINGFIELD ELECTRIC UTILITY\",-78.12,1764.00\n07/05/2025,\"AMAZON MKTPL D15B4CC AMZN.COM BILL\",-46.31,1842.12\n07/04/2025,\"ACME LOGISTICS INC PAYROLL DIRECT DEP\",1396.50,1888.43\n07/03/2025,\"PLANET FITNESS CLUB FEES\",-24.99,491.93\n07/03/2025,\"MCDONALDS F2241 SPRINGFIELD\",-20.41,516.92\n07/02/2025,\"WENDYS 0331 SPRINGFIELD\",-21.02,537.33\n07/02/2025,\"TARGET T-2031 SPRINGFIELD\",-17.27,558.35\n07/02/2025,\"CIRCLE K 4421 SPRINGFIELD\",-30.03,575.62\n07/01/2025,\"WILLOW CREEK APARTMENTS RENT PMT\",-1150.00,605.65\n06/29/2025,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-64.08,1755.65\n06/26/2025,\"KROGER 347 SPRINGFIELD\",-60.52,1819.73\n06/26/2025,\"ALDI 68110 SPRINGFIELD\",-58.59,1880.25\n06/24/2025,\"SUBWAY 31002 SPRINGFIELD\",-7.82,1938.84\n06/23/2025,\"CIRCLE K 4421 SPRINGFIELD\",-29.26,1946.66\n06/20/2025,\"ACME LOGISTICS INC PAYROLL DIRECT DEP\",1433.37,1975.92\n06/19/2025,\"CASEYS 2210 SPRINGFIELD\",-31.55,542.55\n06/19/2025,\"ALDI 68110 SPRINGFIELD\",-38.92,574.10\n06/17/2025,\"WENDYS 0331 SPRINGFIELD\",-8.86,613.02\n06/17/2025,\"TACO BELL 4655 SPRINGFIELD\",-23.69,621.88\n06/17/2025,\"KROGER 347 SPRINGFIELD\",-34.22,645.57\n06/15/2025,\"WAL-MART SUPERCENTER 1125 SPRINGFIELD\",-80.21,679.79\n";
+
+/* ================= UTILITIES ================= */
+const $ = id => document.getElementById(id);
+const fmt = n => (n<0?'-':'') + '$' + Math.abs(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+const fmt0 = n => (n<0?'-':'') + '$' + Math.abs(n).toLocaleString('en-US',{maximumFractionDigits:0});
+const MN = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const REDUCED = typeof matchMedia==='function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function lsGet(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } }
+function lsSet(k,v){ try{ localStorage.setItem(k,v); }catch(e){} }
+function lsDel(k){ try{ localStorage.removeItem(k); }catch(e){} }
+
+let toastTimer=null;
+function toast(msg){
+  const t=$('toast'); t.textContent=msg; t.classList.add('show');
+  if(toastTimer) clearTimeout(toastTimer);
+  toastTimer=setTimeout(function(){ t.classList.remove('show'); }, 3200);
+}
+
+/* ================= CLASSIFICATION ENGINE (ported) ================= */
+const RULES = [
+ [/PAYROLL|IL STATE UNIV ACH|INTEREST PAID|IRS TREAS|TAX REF|KASASA ATM REFUND|ACCTVERIFY 840|VSA RTN/, 'Income & Refunds'],
+ [/PAY OFF LOAN|TRANSFER TO LOANS/, 'Loan Payments'],
+ [/DISCOVER E-PAYMENT|CAPITAL ONE/, 'Credit Card Payments'],
+ [/FID BKG|NATL FIN SVC|TRANSFER TO SAVER|TO CODY OSBORN|ROBINHOOD/, 'Savings & Investments'],
+ [/JUD ?MNTGMY COURT/, 'Legal & Court'],
+ [/STUDENT APARTMEN|APARTMENTS? RENT|RENT PMT|\bLEASING\b|PROPERTY MGMT/, 'Rent & Housing'],
+ [/PROG UNIVERSAL INS|PROGRESSIVE INSURANCE|GEICO|STATE FARM|ALLSTATE/, 'Insurance'],
+ [/XFINITY|COMCAST|VERIZON|T-MOBILE|AT&T|SPECTRUM|ELECTRIC UTILIT|WATER UTILIT|GAS UTILIT|UTILITY|UTILITIES/, 'Utilities & Bills'],
+ [/LINCOLN LAND|COLLEGE TRANSCRIPT|QUIZLET|COMPTIA|ISU PURCHASE|ISU ST ACC|ISU ONLINE|ISU PARKING|ILLINOIS ?STATE ?UNIVERSI|JONES BARTLETT|CENGAGE|PEARSON|MCGRAW-HILL|WW NORTON|COURSERA|ALAMO II BKST/, 'Education'],
+ [/HRB ONLINE TAX/, 'Taxes'],
+ [/SPEEDY LUBE|O REILLY|CAR WASH|\bUBER\b|\bLYFT\b|JIFFY LUBE|VALVOLINE|AUTOZONE/, 'Auto'],
+ [/CRUNCH|WORKOUT COMPANY|G\.Y\.M\.|PLANET FITNESS|LA FITNESS|ANYTIME FITNESS|YMCA/, 'Gym & Fitness'],
+ [/GAME PASS|EB CHICAGO|EB TAKE ME OUT|SQ CAGES|RIOT AN|STUBHUB|GRIFFIN MUS|NAVY PIER|MICROSOFT|XBOX/, 'Entertainment'],
+ [/ATM SERVICE CHARGE|PHONE TRANSFER FEE|TN SERV FEE|FEDEX/, 'Fees'],
+ [/\bWDL\b/, 'Cash Withdrawals'],
+ [/IMPULSE VAPE|SMOKERS DEN/, 'Vape & Tobacco'],
+ [/SUNNY AND REDS|BLUE BELL CLUB|THE VAULT|SIX STRINGS|THE ZONE 24|WESTERN TAP|LIL BEAVER|PUB 2|707 LIQUORS|LUCKY SEVENS/, 'Bars & Nightlife'],
+ [/VITAMIN SHOPPE|CVS PHARMACY|SAV-MOR|SPRINGFIELD CLINIC|DENTAL|AMERICA S BEST/, 'Health & Pharmacy'],
+ [/STEAM|APPLE|CLAUDE|ANTHROPIC|OPENAI|CHATGPT|LINKEDIN|RESUME\.CO|CCLEANER|AMAZON PRIME|NETFLIX|SPOTIFY|HULU|DISNEY PLUS|DISNEY\+|YOUTUBE PREM|PARAMOUNT\+/, 'Subscriptions & Digital'],
+ [/MCDONALDS|DAVES HOT CHICKEN|TACO BELL|DAIRY QUEEN|COLDSTONE|DENNYS|DADDIOS|POTRILLOS|MCALISTER|DOMINO|PANDA EXPRESS|FLINGERS|FAT JACKS|FARMERS STATION|PEGGY KINNANES|HOME AWAY FROM HOM|VINES ON CLARK|SHAKE SHACK|MCDONALD|HAWG DINER|SEOUL MAMA|CHIPOTLE|RAISING CANES|JIMMY JOHNS|TRES COMPADRES|ARV BURGERS|HEATERZ|DOORDASH|CANTEEN VENDING|\bTST\b|\bSQ\b|STARBUCKS|SUBWAY|WENDY|BURGER KING|\bKFC\b|POPEYES|PIZZA HUT|PAPA JOHN|OLIVE GARDEN|APPLEBEE|IHOP|DUNKIN/, 'Dining & Fast Food'],
+ [/CASEYS|FAST STOP|AYERCO|ARLINGTON MART|CIRCLE K|PHILLIPS 66|AMITY FOOD MART|SHELL OIL|\bSHELL\b|EXXON|CHEVRON|\bBP\b|MARATHON PETRO|SPEEDWAY/, 'Gas & Convenience'],
+ [/ALDI|JEWEL OSCO|SCHNUCKS|WAL-MART|WM SUPERCENTER|DOLLAR.GENERAL|DOLLAR TREE|KROGER|\bTARGET\b|COSTCO|WHOLE FOODS|TRADER JOE|PUBLIX|SAFEWAY|MEIJER|FOOD LION/, 'Groceries & Household'],
+ [/ROSS STORES|TIKTOK SHOP|AMAZON|META STORE|TJMAXX|ALIEXPRESS|NORMAL GADGETS|THE ITEM SHOP|ADVANCED COMPUTING|HP\.COM|BEST BUY/, 'Shopping'],
+ [/SPORT CLIPS|CSC SERVICEWORK/, 'Personal Care'],
+ [/VENMO|CASH APP|PHTFRDDA|PHONE TFR/, 'P2P & Transfers']
+];
+const ALL_CATS = ['Rent & Housing','Loan Payments','P2P & Transfers','Education','Credit Card Payments','Shopping','Groceries & Household','Legal & Court','Dining & Fast Food','Insurance','Utilities & Bills','Gas & Convenience','Entertainment','Savings & Investments','Subscriptions & Digital','Health & Pharmacy','Gym & Fitness','Auto','Cash Withdrawals','Vape & Tobacco','Bars & Nightlife','Personal Care','Fees','Taxes','Other','Income & Refunds'];
+
+const COLORS = {
+ 'Rent & Housing':'#e8590c','Loan Payments':'#e03131','P2P & Transfers':'#2f9e44',
+ 'Education':'#66a80f','Credit Card Payments':'#f08c00','Shopping':'#7048e8',
+ 'Groceries & Household':'#37b24d','Legal & Court':'#c2255c','Dining & Fast Food':'#0ca678',
+ 'Insurance':'#099268','Utilities & Bills':'#0b7285','Gas & Convenience':'#1c7ed6','Entertainment':'#f76707',
+ 'Savings & Investments':'#4263eb','Subscriptions & Digital':'#ae3ec9','Health & Pharmacy':'#15aabf',
+ 'Gym & Fitness':'#d6336c','Auto':'#fd7e14','Cash Withdrawals':'#9c36b5',
+ 'Vape & Tobacco':'#94a000','Bars & Nightlife':'#e8b500','Personal Care':'#d9480f',
+ 'Fees':'#868e96','Taxes':'#228be6','Other':'#adb5bd','Income & Refunds':'#188d49'
+};
+const color = c => COLORS[c] || '#adb5bd';
+
+function classify(desc, amt){
+  if(amt > 0) return 'Income & Refunds';
+  const u = String(desc).toUpperCase();
+  for(let i=0;i<RULES.length;i++) if(RULES[i][0].test(u)) return RULES[i][1];
+  return 'Other';
+}
+
+const MERCHANTS = ['CASEYS','MCDONALD','DOLLAR GENERAL','VITAMIN SHOPPE','FAST STOP','WAL-MART','WM SUPERCENTER','ALDI','JEWEL OSCO','SCHNUCKS','KROGER','DOLLAR TREE','TACO BELL','DAIRY QUEEN','COLDSTONE','DENNYS','DADDIOS','POTRILLOS','MCALISTER','DOMINO','PANDA EXPRESS','FLINGERS','FAT JACKS','SHAKE SHACK','CHIPOTLE','RAISING CANES','JIMMY JOHNS','DAVES HOT CHICKEN','TIKTOK SHOP','ROSS STORES','AMAZON','META STORE','TJMAXX','HP.COM','APPLE','CLAUDE','ANTHROPIC','OPENAI','QUIZLET','STEAM','RIOT','MICROSOFT','XBOX','STUBHUB','CIRCLE K','PHILLIPS 66','CVS','SAV-MOR','SPORT CLIPS','CRUNCH','IMPULSE VAPE','SMOKERS DEN','ROBINHOOD','CASH APP','VENMO','DISCOVER','CAPITAL ONE','FID BKG','PROG','STUDENT APARTMEN','IL STATE UNIV','ISU','PHTFR','PHONE TFR','JUD MNTGMY','JUDMNTGMY','TRANSFER TO LOANS','PAY OFF LOAN','LINCOLN LAND','COMPTIA','DOORDASH','CANTEEN VENDING','AYERCO','SPRINGFIELD CLINIC','SPEEDY LUBE','O REILLY','G.Y.M.','WORKOUT COMPANY','707 LIQUORS','LIL BEAVER','COURSERA','CENGAGE','PEARSON','MCGRAW-HILL','NETFLIX','SPOTIFY','STARBUCKS','SHELL','TARGET','COSTCO','PLANET FITNESS','GEICO','XFINITY','VERIZON','UBER','LYFT','WILLOW CREEK','BEST BUY','WENDYS','SUBWAY','ACME LOGISTICS','ROBINHOOD'];
+const NICE = {'MCDONALD':"McDonald's",'CASEYS':"Casey's",'WAL-MART':'Walmart','WM SUPERCENTER':'Walmart','POTRILLOS':'Los Potrillos','DENNYS':"Denny's Doughnuts",'DADDIOS':"Daddio's",'MCALISTER':"McAlister's Deli",'DOMINO':"Domino's",'DAVES HOT CHICKEN':"Dave's Hot Chicken",'PROG':'Progressive Insurance','STUDENT APARTMEN':'Student Apartments (Rent)','IL STATE UNIV':'IL State Univ','ISU':'Illinois State Univ','PHTFR':'Phone Transfer','PHONE TFR':'Phone Transfer','JUD MNTGMY':'Montgomery Co. Court','JUDMNTGMY':'Montgomery Co. Court','TRANSFER TO LOANS':'Loan Payment','PAY OFF LOAN':'Loan Payoff','FID BKG':'Fidelity','HP.COM':'HP Store','SAV-MOR':'Sav-Mor Pharmacy','G.Y.M.':'G.Y.M. Taylorville','RIOT':'Riot Games','WILLOW CREEK':'Willow Creek Apts (Rent)','ACME LOGISTICS':'Acme Logistics (Payroll)','SHELL':'Shell','XFINITY':'Xfinity','VERIZON':'Verizon','WENDYS':"Wendy's"};
+
+function cleanDesc(desc){
+  let d = String(desc).replace(/^4274 (VSA PUR|PUR|VSA RECUR|RECUR|VSA RTN|WDL|PMT DB|ATM)\s*/,'').trim();
+  d = d.replace(/^VSA PUR\s*/,'');
+  return d;
+}
+function merchant(desc){
+  const u = String(desc).toUpperCase();
+  for(let i=0;i<MERCHANTS.length;i++){
+    if(u.indexOf(MERCHANTS[i])>=0) return NICE[MERCHANTS[i]] || MERCHANTS[i].split(' ').map(w=>w.charAt(0)+w.slice(1).toLowerCase()).join(' ');
+  }
+  let d = cleanDesc(desc);
+  d = d.replace(/^(TST|SQ)\s+/,'');
+  d = d.replace(/\d{3}-\d{3,}.*/,'');
+  d = d.replace(/\s+(IL|CA|WA|NY|NC|OH|VA|MO|TX|FL)$/,'').trim();
+  const words = d.split(/\s+/).slice(0,3);
+  if(!words.length || !words[0]) return 'Unknown';
+  return words.map(w=>w.charAt(0).toUpperCase()+w.slice(1).toLowerCase()).join(' ');
+}
+
+/* user overrides: merchant -> category */
+let OVERRIDES = {};
+try{ OVERRIDES = JSON.parse(lsGet('of_overrides')||'{}'); }catch(e){ OVERRIDES = {}; }
+function applyOverrides(tx){
+  tx.forEach(function(t){ if(t.amt<0 && OVERRIDES[t.merch]) t.cat = OVERRIDES[t.merch]; });
+}
+
+/* ================= CSV PARSER ================= */
+function parseCSV(text){
+  text = String(text).replace(/^﻿/,'');
+  const head = text.slice(0, 4000);
+  let best = ',', bestC = 0;
+  [',',';','\t','|'].forEach(function(d){
+    const c = head.split('\n').slice(0,5).join('\n').split(d).length - 1;
+    if(c > bestC){ bestC = c; best = d; }
+  });
+  const rows = []; let row = [], field = '', q = false;
+  for(let i=0;i<text.length;i++){
+    const ch = text[i];
+    if(q){
+      if(ch === '"'){ if(text[i+1] === '"'){ field += '"'; i++; } else q = false; }
+      else field += ch;
+    }
+    else if(ch === '"') q = true;
+    else if(ch === best){ row.push(field); field = ''; }
+    else if(ch === '\n' || ch === '\r'){
+      if(ch === '\r' && text[i+1] === '\n') i++;
+      row.push(field); field = '';
+      if(row.length > 1 || (row[0]||'').trim() !== '') rows.push(row);
+      row = [];
+    }
+    else field += ch;
+  }
+  if(field !== '' || row.length){ row.push(field); if(row.length > 1 || (row[0]||'').trim() !== '') rows.push(row); }
+  return rows;
+}
+
+function parseDateStr(s){
+  s = String(s||'').trim();
+  if(!s) return null;
+  let m;
+  const iso = (y,mo,d)=>{ mo=+mo; d=+d; y=+y; if(mo<1||mo>12||d<1||d>31) return null; return y+'-'+String(mo).padStart(2,'0')+'-'+String(d).padStart(2,'0'); };
+  if(m = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/)) return iso(m[1],m[2],m[3]);
+  if(m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/)){
+    let a=+m[1], b=+m[2], y=+m[3]; if(y<100) y+=2000;
+    if(a>12 && b<=12) return iso(y,b,a);           /* DD/MM */
+    return iso(y,a,b);                              /* MM/DD (US default) */
+  }
+  if(m = s.match(/^([A-Za-z]{3,9})\.?\s+(\d{1,2}),?\s+(\d{4})/)){
+    const mi = MN.findIndex(x => m[1].toLowerCase().slice(0,3) === x.toLowerCase());
+    if(mi >= 0) return iso(m[3], mi+1, m[2]);
+  }
+  return null;
+}
+
+function parseAmtStr(s){
+  if(s === undefined || s === null) return null;
+  s = String(s).trim();
+  if(!s) return null;
+  let neg = false;
+  if(/^\(.*\)$/.test(s)){ neg = true; s = s.slice(1,-1); }
+  s = s.replace(/[$,\s]/g,'');
+  if(!/^[+\-]?\d*\.?\d+$/.test(s)) return null;
+  let v = parseFloat(s);
+  if(isNaN(v)) return null;
+  return neg ? -v : v;
+}
+
+/* ================= AUTO-MAPPING ================= */
+function autoMap(rows){
+  const headers = rows[0].map(h => String(h||'').trim());
+  const data = rows.slice(1, 21);
+  const n = headers.length;
+  const score = { date:[], desc:[], amt:[], bal:[], debit:[], credit:[] };
+  for(let c=0;c<n;c++){
+    const h = headers[c].toLowerCase();
+    let dateS=0, amtS=0, descS=0, balS=0, debS=0, credS=0;
+    if(/date|posted/.test(h)) dateS += 3;
+    if(/^amount$|amount|\bamt\b/.test(h)) amtS += 3;
+    if(/balance|running/.test(h)) balS += 4;
+    if(/desc|memo|payee|detail|narrat|transaction\b|name/.test(h)) descS += 3;
+    if(/debit|withdraw/.test(h)) debS += 4;
+    if(/credit|deposit/.test(h) && !/card/.test(h)) credS += 4;
+    let dateHit=0, numHit=0, negHit=0, lenSum=0, filled=0;
+    data.forEach(function(r){
+      const v = r[c];
+      if(v === undefined || String(v).trim()==='') return;
+      filled++;
+      if(parseDateStr(v)) dateHit++;
+      const a = parseAmtStr(v);
+      if(a !== null){ numHit++; if(a < 0) negHit++; }
+      lenSum += String(v).length;
+    });
+    if(filled){
+      dateS += (dateHit/filled)*5;
+      const numFrac = numHit/filled;
+      amtS  += numFrac*2 + (negHit>0 ? 1.5 : 0);
+      balS  += numFrac*1.5;
+      debS  += numFrac*1; credS += numFrac*1;
+      if(dateHit/filled > .6){ amtS=0; balS=0; debS=0; credS=0; descS=0; }
+      descS += Math.min(3, lenSum/filled/12);
+    }
+    score.date.push(dateS); score.desc.push(descS); score.amt.push(amtS);
+    score.bal.push(balS); score.debit.push(debS); score.credit.push(credS);
+  }
+  function bestIdx(arr, exclude, min){
+    let bi=-1, bv=min||1.5;
+    arr.forEach(function(v,i){ if(exclude.indexOf(i)<0 && v>bv){ bv=v; bi=i; } });
+    return bi;
+  }
+  const date = bestIdx(score.date, [], 3);
+  const bal  = bestIdx(score.bal, [date], 3.5);
+  let amt  = bestIdx(score.amt, [date,bal], 2);
+  const desc = bestIdx(score.desc, [date,bal,amt], 1);
+  let debit=-1, credit=-1;
+  if(amt < 0){
+    debit = bestIdx(score.debit, [date,bal,desc], 3.5);
+    credit = bestIdx(score.credit, [date,bal,desc,debit], 3.5);
+  }
+  return { headers:headers, date:date, desc:desc, amt:amt, debit:debit, credit:credit, bal:bal };
+}
+
+/* ================= BUILD TRANSACTIONS ================= */
+let nextId = 1;
+function buildTX(rows, map){
+  const out = []; let skipped = 0;
+  for(let i=1;i<rows.length;i++){
+    const r = rows[i];
+    const dt = parseDateStr(r[map.date]);
+    let amt = null;
+    if(map.amt >= 0) amt = parseAmtStr(r[map.amt]);
+    else {
+      const d = map.debit >=0 ? parseAmtStr(r[map.debit]) : null;
+      const cr = map.credit>=0 ? parseAmtStr(r[map.credit]) : null;
+      if(d !== null && d !== 0) amt = -Math.abs(d);
+      else if(cr !== null && cr !== 0) amt = Math.abs(cr);
+    }
+    if(!dt || amt === null){ skipped++; continue; }
+    const rawDesc = String(r[map.desc]!==undefined ? r[map.desc] : '').trim() || '(no description)';
+    const bal = map.bal >= 0 ? parseAmtStr(r[map.bal]) : null;
+    out.push({ id: nextId++, date: dt, desc: cleanDesc(rawDesc), rawDesc: rawDesc,
+      cat: classify(rawDesc, amt), amt: amt, bal: bal, merch: merchant(rawDesc) });
+  }
+  applyOverrides(out);
+  return { tx: out, skipped: skipped };
+}
+
+/* ================= APP STATE ================= */
+let TX = [], LATEST = '', cur = [], curLabel = '', curDays = 365;
+const LEDGER_LIMIT = 25;
+let showAll = false;
+let pendingRows = null, pendingMap = null, autoSkipped = false, isDemo = false;
+
+function showState(s){
+  ['stUpload','stMap','stLoad','stDash','stPlans'].forEach(function(id){ $(id).style.display = 'none'; });
+  $('st'+s).style.display = '';
+  $('tabs').style.display = (s==='Dash') ? '' : 'none';
+  $('fctl').style.display = (s==='Dash') ? '' : 'none';
+  $('plansLink').className = 'navlink' + (s==='Plans' ? ' active' : '');
+  if(s==='Upload'){
+    $('range').textContent = "Drop your bank's CSV export — analyzed privately, right here in your browser.";
+    $('navmeta').textContent = 'Runs entirely in your browser';
+  }
+  if(s==='Plans'){
+    $('range').textContent = 'Three plans. One dashboard. Cancel anytime.';
+  }
+}
+
+/* ================= UPLOAD ================= */
+function handleFile(file){
+  $('uperr').style.display='none';
+  if(!file){ return; }
+  if(!/\.(csv|txt)$/i.test(file.name) && file.type.indexOf('csv')<0 && file.type.indexOf('text')<0){
+    showUpErr('That doesn\'t look like a CSV file. Export your transactions as CSV from your bank and try again.');
+    return;
+  }
+  isDemo = false;
+  const reader = new FileReader();
+  reader.onload = function(){ startMapping(String(reader.result)); };
+  reader.onerror = function(){ showUpErr('Could not read that file. Try re-exporting it from your bank.'); };
+  reader.readAsText(file);
+}
+function showUpErr(msg){ const e=$('uperr'); e.textContent=msg; e.style.display='block'; }
+
+function startMapping(text){
+  let rows;
+  try{ rows = parseCSV(text); }catch(e){ showUpErr('Could not parse that file: '+e.message); showState('Upload'); return; }
+  if(!rows || rows.length < 2){ showUpErr('That file has no data rows. Make sure it\'s a transactions export with a header line.'); showState('Upload'); return; }
+  pendingRows = rows;
+  pendingMap = autoMap(rows);
+  if(!TX.length && mappingConfidence(rows, pendingMap) >= 0.95){
+    autoSkipped = true;
+    generate();
+    return;
+  }
+  autoSkipped = false;
+  renderMapping();
+  showState('Map');
+  if(typeof scrollTo === 'function') scrollTo({top:0});
+}
+
+function mappingConfidence(rows, m){
+  if(m.date<0 || m.desc<0 || (m.amt<0 && m.debit<0 && m.credit<0)) return 0;
+  const hl = rows[0].map(x=>String(x||'').toLowerCase());
+  const headerOK = /date|posted/.test(hl[m.date]||'')
+    && (m.amt>=0 ? /amount|amt/.test(hl[m.amt]||'') : (/debit|withdraw/.test(hl[m.debit]||'') || /credit|deposit/.test(hl[m.credit]||'')))
+    && /desc|memo|payee|detail|narrat|transaction|name/.test(hl[m.desc]||'');
+  let ok=0, tot=0;
+  rows.slice(1,21).forEach(function(r){
+    tot++;
+    const d = parseDateStr(r[m.date]);
+    const a = m.amt>=0 ? parseAmtStr(r[m.amt])
+      : ((m.debit>=0 && parseAmtStr(r[m.debit])!==null) || (m.credit>=0 && parseAmtStr(r[m.credit])!==null) ? 0 : null);
+    if(d && a !== null) ok++;
+  });
+  return (headerOK ? 0.5 : 0) + (tot ? (ok/tot)*0.5 : 0);
+}
+
+function renderMapping(){
+  const m = pendingMap, headers = m.headers;
+  const colName = i => headers[i] || ('column '+(i+1));
+  const amtOK = m.amt>=0 || m.debit>=0 || m.credit>=0;
+  const amtLabel = m.amt>=0 ? colName(m.amt) : [m.debit>=0?colName(m.debit):null, m.credit>=0?colName(m.credit):null].filter(Boolean).join('" + "');
+  const chips = [
+    [m.date>=0, m.date>=0 ? 'Dates — "'+colName(m.date)+'"' : 'Pick your date column'],
+    [m.desc>=0, m.desc>=0 ? 'Descriptions — "'+colName(m.desc)+'"' : 'Pick your description column'],
+    [amtOK, amtOK ? 'Amounts — "'+amtLabel+'"' : 'Pick your amount column']
+  ];
+  let ch = '';
+  chips.forEach(function(c){ ch += '<span class="chip '+(c[0]?'ok':'warn')+'">'+(c[0]?'✓':'→')+' '+esc(c[1])+'</span>'; });
+  $('mapchips').innerHTML = ch;
+
+  function selHTML(f, label){
+    let s = '<div class="mapfield"><div class="mlab">'+label+'</div><select data-f="'+f+'"><option value="-1">— none —</option>';
+    headers.forEach(function(hd,i){ s += '<option value="'+i+'"'+(m[f]===i?' selected':'')+'>'+esc(hd||('column '+(i+1)))+'</option>'; });
+    return s + '</select></div>';
+  }
+  $('mapgrid').innerHTML = selHTML('date','Date') + selHTML('desc','Description') + selHTML('amt','Amount');
+  $('mapgrid2').innerHTML = selHTML('debit','Debit — money out') + selHTML('credit','Credit — money in') + selHTML('bal','Balance');
+  if($('advOpts') && m.amt<0 && (m.debit>=0 || m.credit>=0)) $('advOpts').open = true;
+  ['mapgrid','mapgrid2'].forEach(function(g){
+    $(g).querySelectorAll('select').forEach(function(sel){
+      sel.addEventListener('change', function(){
+        pendingMap[this.getAttribute('data-f')] = parseInt(this.value,10);
+        renderMapping();
+      });
+    });
+  });
+
+  const roles = {};
+  if(m.date>=0) roles[m.date]='DATE';
+  if(m.desc>=0) roles[m.desc]='DESCRIPTION';
+  if(m.amt>=0) roles[m.amt]='AMOUNT';
+  if(m.debit>=0) roles[m.debit]='DEBIT';
+  if(m.credit>=0) roles[m.credit]='CREDIT';
+  if(m.bal>=0) roles[m.bal]='BALANCE';
+  let ph = '<tr>';
+  headers.forEach(function(hd,i){
+    ph += roles[i]!==undefined
+      ? '<th class="pvhl">'+esc(hd||('column '+(i+1)))+'<span class="role">'+roles[i]+'</span></th>'
+      : '<th>'+esc(hd||('column '+(i+1)))+'</th>';
+  });
+  $('pvhead').innerHTML = ph + '</tr>';
+  let pb = '';
+  pendingRows.slice(1,6).forEach(function(r){
+    pb += '<tr>';
+    headers.forEach(function(hd,i){ pb += '<td'+(roles[i]!==undefined?' class="pvhl"':'')+'>'+esc(r[i]!==undefined?r[i]:'')+'</td>'; });
+    pb += '</tr>';
+  });
+  $('pvbody').innerHTML = pb;
+  $('mapinfo').textContent = (pendingRows.length-1)+' data rows detected';
+  $('modeRow').style.display = TX.length ? 'flex' : 'none';
+  validateMapping();
+}
+
+function validateMapping(){
+  const m = pendingMap;
+  const errs = [];
+  if(m.date < 0) errs.push('Pick a date column.');
+  if(m.desc < 0) errs.push('Pick a description column.');
+  if(m.amt < 0 && m.debit < 0 && m.credit < 0) errs.push('Pick an amount column (or debit/credit columns).');
+  if(!errs.length){
+    let ok = 0;
+    pendingRows.slice(1, 21).forEach(function(r){
+      const d = parseDateStr(r[m.date]);
+      const a = m.amt>=0 ? parseAmtStr(r[m.amt]) : (m.debit>=0&&parseAmtStr(r[m.debit])!==null)||(m.credit>=0&&parseAmtStr(r[m.credit])!==null) ? 0 : null;
+      if(d && a !== null) ok++;
+    });
+    if(ok === 0) errs.push('No rows have a valid date + amount with this mapping. Check the date and amount columns.');
+  }
+  const e = $('maperr');
+  if(errs.length){ e.innerHTML = errs.map(esc).join('<br>'); e.style.display='block'; }
+  else e.style.display='none';
+  $('genBtn').disabled = errs.length > 0;
+  return errs.length === 0;
+}
+
+function generate(){
+  if(!validateMapping()) return;
+  const res = buildTX(pendingRows, pendingMap);
+  if(!res.tx.length){
+    const e=$('maperr'); e.textContent='No usable transactions found with this mapping.'; e.style.display='block';
+    return;
+  }
+  let mode = 'replace';
+  document.querySelectorAll('input[name=upmode]').forEach(function(r){ if(r.checked) mode = r.value; });
+  let merged = res.tx, dupes = 0;
+  if(mode === 'append' && TX.length){
+    const seen = {};
+    TX.forEach(function(t){ seen[t.date+'|'+t.amt+'|'+t.rawDesc] = 1; });
+    merged = TX.slice();
+    res.tx.forEach(function(t){
+      const k = t.date+'|'+t.amt+'|'+t.rawDesc;
+      if(seen[k]){ dupes++; } else { seen[k]=1; merged.push(t); }
+    });
+  }
+  /* decrypting moment */
+  showState('Load');
+  let decTicks = 0;
+  const decI = setInterval(function(){
+    let s = '$';
+    for(let i=0;i<7;i++){ s += (i===3?',':'')+Math.floor(Math.random()*10); }
+    $('decText').textContent = s + '.' + Math.floor(Math.random()*10) + Math.floor(Math.random()*10);
+    if(++decTicks > 14){ clearInterval(decI); }
+  }, 50);
+  setTimeout(function(){
+    clearInterval(decI);
+    loadDashboard(merged);
+    toast((autoSkipped ? 'Columns detected automatically · ' : '')+res.tx.length+' transactions imported'+(res.skipped? ' · '+res.skipped+' rows skipped':'')+(dupes? ' · '+dupes+' duplicates ignored':''));
+  }, REDUCED ? 50 : 850);
+}
+
+/* ================= DASHBOARD BOOT ================= */
+function loadDashboard(tx){
+  TX = tx.slice().sort(function(a,b){ return a.date<b.date?-1:a.date>b.date?1:0; });
+  LATEST = TX.length ? TX[TX.length-1].date : '';
+  if(lsGet('of_remember')==='1') lsSet('of_data', JSON.stringify(TX));
+  adaptTabs();
+  showState('Dash');
+  document.querySelectorAll('.reveal').forEach(function(el){ el.classList.add('in'); });
+  const def = defaultRange();
+  document.querySelectorAll('.tab').forEach(function(b){
+    b.classList[ +b.getAttribute('data-days') === def.days ? 'add' : 'remove' ]('active');
+  });
+  setRange(def.days, def.label);
+}
+
+function spanDays(){
+  if(!TX.length) return 0;
+  return (new Date(TX[TX.length-1].date) - new Date(TX[0].date))/86400000;
+}
+function adaptTabs(){
+  const span = spanDays();
+  document.querySelectorAll('.tab').forEach(function(b){
+    const d = +b.getAttribute('data-days');
+    b.style.display = (d > 0 && d > span + 20) ? 'none' : '';
+  });
+}
+function defaultRange(){
+  const span = spanDays();
+  if(span >= 345) return {days:365, label:'Last Year'};
+  if(span >= 170) return {days:182, label:'6 Months'};
+  if(span >= 80)  return {days:91,  label:'3 Months'};
+  if(span >= 28)  return {days:30,  label:'Last Month'};
+  return {days:0, label:'All Time'};
+}
+
+function cutoffDate(days){
+  const d = new Date(LATEST + 'T00:00:00');
+  d.setDate(d.getDate() - days);
+  return d.toISOString().slice(0,10);
+}
+
+/* ---------- decryption count-up ---------- */
+const moneyAnims = {};
+function setMoney(id, val, prefixPlus){
+  const el = $(id);
+  const fin = (prefixPlus && val>=0 ? '+' : '') + fmt(val);
+  if(REDUCED || typeof requestAnimationFrame!=='function'){ el.textContent = fin; return; }
+  if(moneyAnims[id] && typeof cancelAnimationFrame==='function') cancelAnimationFrame(moneyAnims[id]);
+  const digitIdx = [];
+  for(let i=0;i<fin.length;i++) if(fin[i]>='0'&&fin[i]<='9') digitIdx.push(i);
+  el.textContent = fin.replace(/[0-9]/g,'0');
+  const t0 = Date.now(), dur = 2500, hold = 0.12;
+  function tick(){
+    const p = Math.min(1,(Date.now()-t0)/dur);
+    if(p >= 1){ el.textContent = fin; return; }
+    if(p < hold){ moneyAnims[id] = requestAnimationFrame(tick); return; }
+    const locked = Math.floor(((p-hold)/(1-hold)) * digitIdx.length);
+    let out = '', di = 0;
+    for(let i=0;i<fin.length;i++){
+      const ch = fin[i];
+      if(ch>='0'&&ch<='9'){ out += (di < locked) ? ch : String(Math.floor(Math.random()*10)); di++; }
+      else out += ch;
+    }
+    el.textContent = out;
+    moneyAnims[id] = requestAnimationFrame(tick);
+  }
+  moneyAnims[id] = requestAnimationFrame(tick);
+}
+
+function setRange(days, label){
+  curLabel = label; curDays = days; showAll = false;
+  cur = days ? TX.filter(t => t.date > cutoffDate(days)) : TX.slice();
+  drawAll();
+}
+
+function drawAll(){
+  const dates = cur.map(t=>t.date).sort();
+  const months = [...new Set(cur.map(t=>t.date.slice(0,7)))].sort();
+  const income = cur.filter(t=>t.amt>0).reduce((s,t)=>s+t.amt,0);
+  const spend  = Math.abs(cur.filter(t=>t.amt<0).reduce((s,t)=>s+t.amt,0));
+  const net = income - spend;
+
+  $('range').textContent = curLabel + ' · ' + cur.length + ' transactions · ' + (dates[0]||'') + ' — ' + (dates[dates.length-1]||'');
+  $('navmeta').textContent = (isDemo ? 'Demo data · ' : '') + 'Data through ' + (dates[dates.length-1]||'');
+  setMoney('cIn', income);
+  $('cInD').textContent = cur.filter(t=>t.amt>0).length + ' deposits';
+  setMoney('cOut', spend);
+  $('cOutD').textContent = cur.filter(t=>t.amt<0).length + ' transactions';
+  setMoney('cNet', net, true);
+  $('cNet').className = 'value ' + (net>=0?'green':'red');
+  $('cNetD').textContent = net>=0 ? 'saved this period' : 'spent more than earned';
+
+  const dayCount = dates.length ? Math.max(1,(new Date(dates[dates.length-1]) - new Date(dates[0]))/86400000 + 1) : 1;
+  drawAvgMonthly();
+
+  const catTotals = {}, catCounts = {};
+  cur.forEach(t=>{ if(t.amt<0){ catTotals[t.cat]=(catTotals[t.cat]||0)+Math.abs(t.amt); catCounts[t.cat]=(catCounts[t.cat]||0)+1; } });
+  const cats = Object.keys(catTotals).map(k=>[k,catTotals[k]]).sort((a,b)=>b[1]-a[1]);
+
+  drawAdvice(catTotals, catCounts, income, spend, dayCount);
+  drawDonut(cats, spend);
+  drawCatList(cats, catCounts, spend);
+  drawMonthly(months);
+  drawMerchants();
+  rebuildFilters(cats, months);
+  render();
+}
+
+/* ---------- avg monthly with automatic outlier exclusion ---------- */
+function drawAvgMonthly(){
+  const windowDays = Math.min(365, Math.max(28, Math.ceil(spanDays())));
+  const cutoff = cutoffDate(windowDays);
+  const win = TX.filter(t=>t.date > cutoff && t.amt < 0);
+  if(!win.length){ setMoney('cAvg', 0); $('cAvgD').textContent='no spending data'; return; }
+  const byMonth = {};
+  win.forEach(function(t){ const k=t.date.slice(0,7); byMonth[k]=(byMonth[k]||0)+Math.abs(t.amt); });
+  const totals = Object.keys(byMonth).map(k=>byMonth[k]).sort((a,b)=>a-b);
+  const median = totals[Math.floor(totals.length/2)] || 0;
+  const threshold = Math.max(median * 1.5, 2000);
+  let excluded = 0, exSum = 0, total = 0;
+  win.forEach(function(t){
+    const a = Math.abs(t.amt);
+    if(a > threshold){ excluded++; exSum += a; } else total += a;
+  });
+  const monthsN = Math.max(1, Math.round(windowDays/30.44));
+  setMoney('cAvg', total/monthsN);
+  $('cAvgD').textContent = excluded
+    ? 'last '+Math.round(monthsN)+' months, excluding '+excluded+' one-time outlier'+(excluded>1?'s':'')+' ('+fmt0(exSum)+')'
+    : 'true monthly average, last '+Math.round(monthsN)+' months';
+}
+
+/* ---------- advisor ---------- */
+function drawAdvice(catTotals, catCounts, income, spend, dayCount){
+  const mo = Math.max(1, dayCount/30.44);
+  const get = c => catTotals[c]||0;
+  const per = c => get(c)/mo;
+  const tips = [];
+  const net = income - spend;
+  const rate = income>0 ? net/income*100 : 0;
+
+  if(income <= 0 && spend > 0){
+    tips.push({i:'!', t:'No income detected in this period', s:0, pin:true,
+      x:'This range only shows spending ('+fmt(spend)+'). If your export includes deposits, widen the range — otherwise the advisor focuses on the spending patterns below.'});
+  } else if(net < 0){
+    tips.push({i:'!', t:'You spent more than you earned', s:0, pin:true,
+      x:'Outflow exceeded income by '+fmt(-net)+' in this period. A common guideline is keeping spending at or below 80% of income; the items below are the easiest places to claw that back.'});
+  } else if(rate < 10){
+    tips.push({i:'%', t:'Thin savings margin ('+rate.toFixed(1)+'%)', s:0, pin:true,
+      x:'You kept '+fmt(net)+' of '+fmt(income)+' earned. A 20% savings rate would mean setting aside about '+fmt0(income*0.2/mo)+' per month — the suggestions below could close most of that gap.'});
+  } else {
+    tips.push({i:'✓', t:'Solid savings rate ('+rate.toFixed(1)+'%)', s:0, pin:true,
+      x:'You kept '+fmt(net)+' of your income. Consider auto-transferring that surplus on payday so it compounds instead of sitting in checking.'});
+  }
+
+  if(get('Dining & Fast Food') > 0 && (catCounts['Dining & Fast Food']||0) >= 5){
+    const n = catCounts['Dining & Fast Food']||0;
+    tips.push({i:'🍔', t:'Dining out '+Math.max(1,(n/mo)).toFixed(0)+'× a month', s:get('Dining & Fast Food')*0.33/mo,
+      x:n+' restaurant and fast-food purchases totaling '+fmt0(get('Dining & Fast Food'))+' ('+fmt0(per('Dining & Fast Food'))+'/mo). Skipping one of every three trips keeps the habit but trims a third of the cost.'});
+  }
+
+  if(get('Subscriptions & Digital') > 0){
+    const merchSet = {};
+    cur.forEach(t=>{ if(t.amt<0 && t.cat==='Subscriptions & Digital') merchSet[t.merch]=1; });
+    const names = Object.keys(merchSet);
+    if(names.length >= 2) tips.push({i:'↻', t:names.length+' active subscriptions', s:get('Subscriptions & Digital')*0.4/mo,
+      x:fmt0(per('Subscriptions & Digital'))+'/mo across '+names.slice(0,6).join(', ')+(names.length>6?'…':'')+'. Audit for overlap — most people can cancel 1–2 they barely use.'});
+  }
+
+  if(get('Vape & Tobacco') > 0){
+    tips.push({i:'⚠', t:'Vape & tobacco adds up', s:per('Vape & Tobacco'),
+      x:fmt0(get('Vape & Tobacco'))+' this period ('+fmt0(per('Vape & Tobacco'))+'/mo ≈ '+fmt0(per('Vape & Tobacco')*12)+'/yr). A line item you could zero out entirely — with a health dividend on top.'});
+  }
+
+  const micro = cur.filter(t=>t.amt<0 && t.amt>-15 && ['Gas & Convenience','Groceries & Household','Dining & Fast Food'].indexOf(t.cat)>=0);
+  if(micro.length >= 10){
+    const mtot = Math.abs(micro.reduce((s,t)=>s+t.amt,0));
+    tips.push({i:'¢', t:micro.length+' purchases under $15', s:mtot*0.3/mo,
+      x:'Small convenience-store and snack buys totaled '+fmt0(mtot)+' ('+fmt0(mtot/mo)+'/mo). Batching errands and buying snacks at the grocery store instead cuts this sharply.'});
+  }
+
+  if(get('Fees') > 0){
+    tips.push({i:'$', t:'Avoidable fees', s:per('Fees'),
+      x:fmt(get('Fees'))+' in ATM service charges and transfer fees. In-network ATMs or cash-back at checkout makes this $0.'});
+  }
+
+  if(get('Cash Withdrawals') > 0){
+    tips.push({i:'?', t:'Untracked cash', s:0,
+      x:fmt0(get('Cash Withdrawals'))+' withdrawn as cash this period. Cash spending is invisible to this dashboard — moving it to card keeps the picture honest.'});
+  }
+
+  const debt = get('Loan Payments') + get('Credit Card Payments');
+  if(debt > 0 && income > 0){
+    const share = debt/income*100;
+    if(share > 25) tips.push({i:'↓', t:'Debt service is '+share.toFixed(0)+'% of income', s:0,
+      x:fmt0(debt)+' went to loans and credit cards. Above ~25% of income is heavy — prioritize the highest-rate balance first and avoid adding new charges.'});
+  }
+
+  if(income > 0 && get('Savings & Investments') < income*0.05){
+    tips.push({i:'↑', t:'Investing is light', s:0,
+      x:'Only '+fmt0(per('Savings & Investments'))+'/mo went to savings or investments. Even '+fmt0(income*0.05/mo)+'/mo (5% of income) automated on payday builds momentum without feeling it.'});
+  }
+
+  if(get('P2P & Transfers') > income*0.08 && get('P2P & Transfers') > 200){
+    tips.push({i:'⇄', t:'Large P2P outflow', s:0,
+      x:fmt0(get('P2P & Transfers'))+' left via peer-to-peer apps and transfers. Money sent to people is the easiest spending to lose track of — worth labeling.'});
+  }
+
+  const pinned = tips.filter(t=>t.pin);
+  const rest = tips.filter(t=>!t.pin).sort((a,b)=>b.s-a.s).slice(0,6);
+  const list = pinned.concat(rest);
+  const totalSave = rest.reduce((s,t)=>s+t.s,0);
+  let html = '';
+  list.forEach(t=>{
+    html += '<div class="advrow"><div class="advicon">'+t.i+'</div><div class="advbody">'+
+      '<div class="advtitle">'+t.t+'</div><div class="advtext">'+t.x+'</div></div>'+
+      (t.s>1 ? '<div class="advsave">≈ '+fmt0(t.s)+'/mo back</div>' : '')+'</div>';
+  });
+  if(totalSave > 1){
+    html += '<div class="advrow"><div class="advicon">Σ</div><div class="advbody">'+
+      '<div class="advtitle">Total opportunity</div><div class="advtext">Acting on the suggestions above frees roughly '+fmt0(totalSave)+' per month — about '+fmt0(totalSave*12)+' a year.</div></div>'+
+      '<div class="advsave">≈ '+fmt0(totalSave)+'/mo</div></div>';
+  }
+  $('advice').innerHTML = html || '<div class="empty">Not enough data for insights in this period</div>';
+}
+
+/* ---------- donut ---------- */
+function drawDonut(cats, totalSpend){
+  if(!cats.length){ $('donut').innerHTML = '<div class="empty">No spending in this period</div>'; return; }
+  const R=82, INNER=52, CX=100, CY=100;
+  let a0 = -Math.PI/2, segs = '';
+  cats.forEach(([name,val],idx)=>{
+    const frac = val/totalSpend;
+    const a1 = a0 + frac*2*Math.PI;
+    const aEnd = Math.min(a1, a0 + 2*Math.PI - 0.0001);
+    const large = (aEnd-a0) > Math.PI ? 1 : 0;
+    const p = (a,r)=>(CX+r*Math.cos(a)).toFixed(2)+' '+(CY+r*Math.sin(a)).toFixed(2);
+    segs += '<path class="donut-seg" style="animation-delay:'+(idx*45)+'ms" d="M'+p(a0,R)+' A'+R+' '+R+' 0 '+large+' 1 '+p(aEnd,R)+
+      ' L'+p(aEnd,INNER)+' A'+INNER+' '+INNER+' 0 '+large+' 0 '+p(a0,INNER)+' Z" fill="'+color(name)+
+      '" stroke="#ffffff" stroke-width="1.5" data-cat="'+esc(name)+'"><title>'+esc(name)+': '+fmt(val)+' ('+(frac*100).toFixed(1)+'%)</title></path>';
+    a0 = a1;
+  });
+  segs += '<text class="donut-c" x="100" y="95" text-anchor="middle" fill="#1b1530" font-size="15" font-weight="700" letter-spacing="-0.5">'+fmt0(totalSpend)+'</text>';
+  segs += '<text class="donut-c" x="100" y="112" text-anchor="middle" fill="#8d86a4" font-size="9.5">TOTAL SPENT</text>';
+  $('donut').innerHTML = '<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">'+segs+'</svg>';
+  $('donut').querySelectorAll('.donut-seg').forEach(function(p){
+    p.addEventListener('click', function(){ filterCat(this.getAttribute('data-cat')); });
+  });
+}
+
+/* ---------- category list ---------- */
+function drawCatList(cats, counts, totalSpend){
+  if(!cats.length){ $('catlist').innerHTML = '<div class="empty">No spending in this period</div>'; return; }
+  const maxCat = cats[0][1];
+  let html = '';
+  cats.forEach(([name,val])=>{
+    html += '<div class="catrow" data-cat="'+esc(name)+'" title="'+(val/totalSpend*100).toFixed(1)+'% of spending">'+
+      '<span class="dot" style="background:'+color(name)+'"></span>'+
+      '<span class="name">'+esc(name)+'</span>'+
+      '<span class="n">×'+counts[name]+'</span>'+
+      '<span class="bar" data-w="'+Math.max(4, val/maxCat*110)+'" style="background:'+color(name)+'"></span>'+
+      '<span class="val">'+fmt(val)+'</span></div>';
+  });
+  $('catlist').innerHTML = html;
+  $('catlist').querySelectorAll('.catrow').forEach(function(r){
+    r.addEventListener('click', function(){ filterCat(this.getAttribute('data-cat')); });
+  });
+  sweepBars($('catlist'));
+}
+
+function sweepBars(root){
+  const bars = root.querySelectorAll('.bar');
+  if(typeof requestAnimationFrame!=='function' || REDUCED){
+    bars.forEach(function(b){ b.style.width = b.getAttribute('data-w')+'px'; });
+    return;
+  }
+  requestAnimationFrame(function(){ requestAnimationFrame(function(){
+    bars.forEach(function(b){ b.style.width = b.getAttribute('data-w')+'px'; });
+  });});
+}
+
+/* ---------- cash flow ---------- */
+function drawMonthly(months){
+  if(!months.length){ $('monthly').innerHTML = '<div class="empty">No data</div>'; return; }
+  const weekly = months.length <= 2;
+  $('mtitle').textContent = 'Cash flow';
+  $('msub').textContent = (weekly?'Weekly':'Monthly') + ' income vs spending';
+  let buckets, labels;
+  if(weekly){
+    const end = new Date(LATEST+'T00:00:00');
+    const ds = cur.map(t=>t.date).sort();
+    const span = Math.min(13, Math.max(2, Math.ceil(((end - new Date(ds[0]+'T00:00:00'))/86400000 + 1)/7)));
+    buckets = []; labels = [];
+    for(let i=span-1;i>=0;i--){
+      const b1 = new Date(end); b1.setDate(b1.getDate()-i*7);
+      const b0 = new Date(b1); b0.setDate(b0.getDate()-6);
+      buckets.push([b0.toISOString().slice(0,10), b1.toISOString().slice(0,10)]);
+      labels.push(MN[b0.getMonth()]+' '+b0.getDate());
+    }
+  } else {
+    buckets = months.map(m=>[m+'-01', m+'-31']);
+    labels = months.map(m=>MN[+m.slice(5)-1]+" '"+m.slice(2,4));
+  }
+  const mIn = buckets.map(b=>cur.filter(t=>t.date>=b[0]&&t.date<=b[1]&&t.amt>0).reduce((s,t)=>s+t.amt,0));
+  const mOut = buckets.map(b=>Math.abs(cur.filter(t=>t.date>=b[0]&&t.date<=b[1]&&t.amt<0).reduce((s,t)=>s+t.amt,0)));
+  const max = Math.max.apply(null, mIn.concat(mOut)) || 1;
+  let html = '';
+  labels.forEach((lab,i)=>{
+    const hIn = Math.max(2, mIn[i]/max*185), hOut = Math.max(2, mOut[i]/max*185);
+    const dly = (i*60)+'ms';
+    html += '<div class="mgroup"><div class="mbars">'+
+      '<div class="mbar" data-h="'+hIn.toFixed(0)+'" style="background:var(--green);transition-delay:'+dly+'"><span class="tip">'+fmt0(mIn[i])+'</span></div>'+
+      '<div class="mbar" data-h="'+hOut.toFixed(0)+'" style="background:var(--v600);transition-delay:'+dly+'"><span class="tip">'+fmt0(mOut[i])+'</span></div>'+
+      '</div><div class="mlabel">'+lab+'</div></div>';
+  });
+  $('monthly').innerHTML = html;
+  const bars = $('monthly').querySelectorAll('.mbar');
+  if(typeof requestAnimationFrame!=='function' || REDUCED){
+    bars.forEach(function(b){ b.style.height = b.getAttribute('data-h')+'px'; });
+  } else {
+    requestAnimationFrame(function(){ requestAnimationFrame(function(){
+      bars.forEach(function(b){ b.style.height = b.getAttribute('data-h')+'px'; });
+    });});
+  }
+}
+
+/* ---------- merchants ---------- */
+function drawMerchants(){
+  const tot = {}, cnt = {};
+  cur.forEach(t=>{ if(t.amt<0){ tot[t.merch]=(tot[t.merch]||0)+Math.abs(t.amt); cnt[t.merch]=(cnt[t.merch]||0)+1; } });
+  const top = Object.keys(tot).map(k=>[k,tot[k]]).sort((a,b)=>b[1]-a[1]).slice(0,12);
+  if(!top.length){ $('merchlist').innerHTML = '<div class="empty">No spending in this period</div>'; return; }
+  const max = top[0][1];
+  let html = '';
+  top.forEach(([name,val])=>{
+    html += '<div class="catrow" data-m="'+esc(name)+'">'+
+      '<span class="name">'+esc(name)+'</span>'+
+      '<span class="n">×'+cnt[name]+'</span>'+
+      '<span class="bar" data-w="'+Math.max(4, val/max*110)+'" style="background:var(--v600)"></span>'+
+      '<span class="val">'+fmt(val)+'</span></div>';
+  });
+  $('merchlist').innerHTML = html;
+  $('merchlist').querySelectorAll('.catrow').forEach(function(r){
+    r.addEventListener('click', function(){
+      fCat.value=''; fSearch.value=this.getAttribute('data-m').split(' ')[0]; showAll=false; render();
+      document.querySelector('.controls').scrollIntoView({behavior:'smooth'});
+    });
+  });
+  sweepBars($('merchlist'));
+}
+
+/* ---------- ledger ---------- */
+const fCat=$('fCat'), fMonth=$('fMonth'), fFlow=$('fFlow'), fSearch=$('fSearch');
+
+function rebuildFilters(cats, months){
+  const keepCat=fCat.value, keepMonth=fMonth.value;
+  fCat.innerHTML='<option value="">All categories</option>';
+  const allCats = cats.map(c=>c[0]).concat(['Income & Refunds']).filter((v,i,a)=>a.indexOf(v)===i).sort();
+  allCats.forEach(function(c){ const o=document.createElement('option'); o.value=c; o.textContent=c; fCat.appendChild(o); });
+  fCat.value = allCats.indexOf(keepCat)>=0 ? keepCat : '';
+  fMonth.innerHTML='<option value="">All months</option>';
+  months.forEach(function(m){ const o=document.createElement('option'); o.value=m; o.textContent=MN[+m.slice(5)-1]+' '+m.slice(0,4); fMonth.appendChild(o); });
+  fMonth.value = months.indexOf(keepMonth)>=0 ? keepMonth : '';
+}
+
+function filterCat(name){
+  fCat.value = name; fSearch.value=''; showAll=false;
+  render();
+  document.querySelector('.controls').scrollIntoView({behavior:'smooth'});
+}
+
+let sortK='date', sortDir=-1;
+document.querySelectorAll('th[data-k]').forEach(function(th){
+  th.addEventListener('click', function(){
+    const k=this.getAttribute('data-k');
+    if(sortK===k) sortDir*=-1; else { sortK=k; sortDir=(k==='date'||k==='amt'||k==='bal')?-1:1; }
+    render();
+  });
+});
+
+function render(){
+  const q = fSearch.value.toLowerCase();
+  let rows = cur.filter(t=>
+    (!fCat.value || t.cat===fCat.value) &&
+    (!fMonth.value || t.date.slice(0,7)===fMonth.value) &&
+    (!fFlow.value || (fFlow.value==='out' ? t.amt<0 : t.amt>0)) &&
+    (!q || t.desc.toLowerCase().indexOf(q)>=0 || t.merch.toLowerCase().indexOf(q)>=0)
+  );
+  rows.sort(function(a,b){ const x=a[sortK],y=b[sortK]; return (x<y?-1:x>y?1:0)*sortDir; });
+  const visible = showAll ? rows : rows.slice(0, LEDGER_LIMIT);
+  let html = '';
+  const hasBal = TX.some(t=>t.bal!==null && t.bal!==undefined);
+  visible.forEach(function(t){
+    const col = color(t.cat);
+    html += '<tr><td style="white-space:nowrap;color:var(--muted)">'+t.date+'</td><td>'+esc(t.desc)+'</td>'+
+      '<td class="tagcell" data-id="'+t.id+'"><span class="tag" title="Click to recategorize"><i style="background:'+col+'"></i>'+esc(t.cat)+'</span></td>'+
+      '<td class="amt" style="font-weight:650;color:'+(t.amt>=0?'var(--green)':'var(--ink)')+'">'+(t.amt>=0?'+':'')+fmt(t.amt)+'</td>'+
+      '<td class="amt" style="color:var(--faint)">'+(hasBal && t.bal!==null && t.bal!==undefined ? fmt(t.bal) : '—')+'</td></tr>';
+  });
+  $('tbody').innerHTML = html;
+  $('tbody').querySelectorAll('.tagcell').forEach(function(td){
+    td.addEventListener('click', function(ev){ openRecat(this); ev.stopPropagation(); });
+  });
+  if(rows.length > LEDGER_LIMIT){
+    $('morebox').innerHTML = '<button class="btn" id="morebtn">' + (showAll ? 'Show fewer ↑' : 'View all ' + rows.length + ' transactions ↓') + '</button>';
+    document.getElementById('morebtn').addEventListener('click', function(){
+      showAll = !showAll;
+      render();
+      if(!showAll) document.querySelector('.controls').scrollIntoView({behavior:'smooth'});
+    });
+  } else {
+    $('morebox').innerHTML = '';
+  }
+  const tot = rows.reduce(function(s,t){return s+t.amt;},0);
+  $('count').textContent = (showAll || rows.length<=LEDGER_LIMIT ? rows.length : 'Showing ' + Math.min(LEDGER_LIMIT,rows.length) + ' of ' + rows.length) + ' transactions · period total ' + (tot>=0?'+':'') + fmt(tot);
+}
+
+/* ---------- recategorize ---------- */
+function openRecat(td){
+  const id = +td.getAttribute('data-id');
+  const t = TX.find(x=>x.id===id);
+  if(!t || td.querySelector('select')) return;
+  let html = '<select class="tagsel">';
+  ALL_CATS.forEach(function(c){ html += '<option'+(c===t.cat?' selected':'')+'>'+esc(c)+'</option>'; });
+  html += '</select>';
+  td.innerHTML = html;
+  const sel = td.querySelector('select');
+  sel.focus && sel.focus();
+  sel.addEventListener('change', function(){
+    const newCat = this.value;
+    OVERRIDES[t.merch] = newCat;
+    lsSet('of_overrides', JSON.stringify(OVERRIDES));
+    let n = 0;
+    TX.forEach(function(x){ if(x.merch===t.merch && x.amt<0){ x.cat = newCat; n++; } });
+    if(lsGet('of_remember')==='1') lsSet('of_data', JSON.stringify(TX));
+    setRange(curDays, curLabel);
+    toast(n+' "'+t.merch+'" transaction'+(n>1?'s':'')+' moved to '+newCat);
+  });
+  sel.addEventListener('blur', function(){ render(); });
+}
+
+function filterChanged(){ showAll = false; render(); }
+fCat.addEventListener('change',filterChanged);
+fMonth.addEventListener('change',filterChanged);
+fFlow.addEventListener('change',filterChanged);
+fSearch.addEventListener('input',filterChanged);
+
+/* ---------- tabs ---------- */
+document.querySelectorAll('.tab').forEach(function(b){
+  b.addEventListener('click', function(){
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+    this.classList.add('active');
+    setRange(+this.getAttribute('data-days'), this.textContent);
+  });
+});
+
+/* ---------- clickable cards ---------- */
+$('cardIn').addEventListener('click', function(){
+  fFlow.value='in'; fCat.value=''; fSearch.value=''; fMonth.value=''; showAll=false;
+  render();
+  document.querySelector('.controls').scrollIntoView({behavior:'smooth'});
+});
+$('cardOut').addEventListener('click', function(){
+  fFlow.value='out'; fCat.value=''; fSearch.value=''; fMonth.value=''; showAll=false;
+  render();
+  document.querySelector('.controls').scrollIntoView({behavior:'smooth'});
+});
+
+/* ---------- upload wiring ---------- */
+const drop = $('drop');
+drop.addEventListener('click', function(e){ if(e.target.id!=='sampleBtn' && e.target.id!=='browseBtn') $('fileInput').click(); });
+$('browseBtn').addEventListener('click', function(e){ e.stopPropagation(); $('fileInput').click(); });
+$('fileInput').addEventListener('change', function(){ if(this.files && this.files[0]) handleFile(this.files[0]); this.value=''; });
+['dragover','dragenter'].forEach(function(ev){
+  drop.addEventListener(ev, function(e){ e.preventDefault(); drop.classList.add('over'); });
+});
+['dragleave','drop'].forEach(function(ev){
+  drop.addEventListener(ev, function(e){ e.preventDefault(); drop.classList.remove('over'); });
+});
+drop.addEventListener('drop', function(e){
+  e.preventDefault();
+  if(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+});
+$('sampleBtn').addEventListener('click', function(e){ e.stopPropagation(); isDemo = true; startMapping(SAMPLE_CSV); });
+$('genBtn').addEventListener('click', generate);
+$('backBtn').addEventListener('click', function(){ showState(TX.length ? 'Dash' : 'Upload'); });
+
+/* ---------- plans + home navigation ---------- */
+$('plansLink').addEventListener('click', function(){
+  showState('Plans');
+  if(typeof scrollTo === 'function') scrollTo({top:0});
+});
+$('brandHome').addEventListener('click', function(){
+  showState(TX.length ? 'Dash' : 'Upload');
+  if(typeof scrollTo === 'function') scrollTo({top:0});
+});
+document.querySelectorAll('.pbtn').forEach(function(b){
+  b.addEventListener('click', function(){
+    toast(this.getAttribute('data-plan')+' plan reserved — Stripe Checkout goes live with the hosted launch. This is a pricing preview.');
+  });
+});
+
+/* ---------- footer controls ---------- */
+$('newUpload').addEventListener('click', function(){ showState('Upload'); if(typeof scrollTo==='function') scrollTo({top:0}); });
+$('rememberChk').addEventListener('change', function(){
+  if(this.checked){
+    lsSet('of_remember','1'); lsSet('of_data', JSON.stringify(TX));
+    toast('Saved on this device — your dashboard will restore next time');
+  } else {
+    lsDel('of_remember'); lsDel('of_data');
+    toast('Device storage cleared for transaction data');
+  }
+});
+$('clearData').addEventListener('click', function(){
+  if(typeof confirm==='function' && !confirm('Clear all saved data (transactions, category fixes, preferences) from this device?')) return;
+  lsDel('of_remember'); lsDel('of_data'); lsDel('of_overrides');
+  OVERRIDES = {}; TX = []; cur = [];
+  $('rememberChk').checked = false;
+  showState('Upload');
+  toast('All data cleared');
+});
+
+/* ---------- scroll systems ---------- */
+if(typeof IntersectionObserver==='function'){
+  const io = new IntersectionObserver(function(entries){
+    entries.forEach(function(en){ if(en.isIntersecting){ en.target.classList.add('in'); io.unobserve(en.target); } });
+  }, {threshold:.12});
+  document.querySelectorAll('.reveal').forEach(function(el){ io.observe(el); });
+} else {
+  document.querySelectorAll('.reveal').forEach(function(el){ el.classList.add('in'); });
+}
+if(typeof addEventListener==='function'){
+  addEventListener('scroll', function(){
+    const n = $('nav');
+    if(n) n.classList[ (window.scrollY||0) > 8 ? 'add' : 'remove']('scrolled');
+  }, {passive:true});
+}
+
+/* ---------- boot ---------- */
+(function boot(){
+  const saved = lsGet('of_remember')==='1' ? lsGet('of_data') : null;
+  if(saved){
+    try{
+      const tx = JSON.parse(saved);
+      if(Array.isArray(tx) && tx.length){
+        tx.forEach(function(t){ if(!t.id) t.id = nextId++; else nextId = Math.max(nextId, t.id+1); });
+        applyOverrides(tx);
+        $('rememberChk').checked = true;
+        loadDashboard(tx);
+        return;
+      }
+    }catch(e){}
+  }
+  showState('Upload');
+})();
+</script>
+</body>
+</html>
