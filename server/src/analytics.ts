@@ -32,6 +32,14 @@ export function summarize(tx: Tx[], days: number, latest: string) {
   };
 }
 
+/**
+ * LOG-1 (intentional design): Avg Monthly Spend is a STABLE BASELINE computed over
+ * up to the trailing 365 days of the user's full history — deliberately independent
+ * of the summary range the user has selected. A 30-day view showing a 30-day
+ * "average month" would just echo that month; the product intent (set in the
+ * client app and carried here) is "what does a normal month cost me", with
+ * single-transaction outliers above max(1.5 × median month, $2,000) excluded.
+ */
 export function avgMonthly(tx: Tx[], latest: string) {
   const spanD = tx.length ? (Date.parse(tx[tx.length - 1].date) - Date.parse(tx[0].date)) / 864e5 : 0;
   const windowDays = Math.min(365, Math.max(28, Math.ceil(spanD)));

@@ -29,6 +29,10 @@ const RULES: Array<[RegExp, string]> = [
 export const ALL_CATS = ['Rent & Housing','Loan Payments','P2P & Transfers','Education','Credit Card Payments','Shopping','Groceries & Household','Legal & Court','Dining & Fast Food','Insurance','Utilities & Bills','Gas & Convenience','Entertainment','Savings & Investments','Subscriptions & Digital','Health & Pharmacy','Gym & Fitness','Auto','Cash Withdrawals','Vape & Tobacco','Bars & Nightlife','Personal Care','Fees','Taxes','Other','Income & Refunds'];
 
 export function classify(desc: string, amt: number): string {
+  // LOG-2 (intentional simplification): all inflows — payroll, interest, refunds,
+  // merchant credits — land in 'Income & Refunds'. Splitting refunds back into
+  // their spending category is a Phase-6 enhancement (needs original-purchase
+  // matching to avoid double-counting income).
   if (amt > 0) return 'Income & Refunds';
   const u = String(desc).toUpperCase();
   for (const [re, cat] of RULES) if (re.test(u)) return cat;

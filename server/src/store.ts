@@ -5,6 +5,8 @@ import { cfg } from './config.js';
 export interface User { id: string; email: string; display_name: string | null; plan: string; stripe_customer_id: string | null; }
 export interface Tx { id: string; user_id: string; date: string; name: string; merchant: string; amount: number; balance: number | null; category: string; source: string; plaid_transaction_id?: string | null; }
 export interface Item { id: string; user_id: string; plaid_item_id: string; institution_name: string; access_token_ciphertext: string; sync_cursor: string | null; status: string; }
+export interface Account { id: string; item_id: string; user_id: string; plaid_account_id: string; name: string; mask: string; type: string; current_balance: number; }
+export interface Subscription { user_id: string; stripe_subscription_id: string | null; plan: string; status: string; current_period_end: string | null; }
 
 export interface Store {
   getOrCreateUser(email: string): Promise<User>;
@@ -23,6 +25,14 @@ export interface Store {
   removeItem(userId: string, itemId: string): Promise<void>;
   countItems(userId: string): Promise<number>;
   setCursor(itemId: string, cursor: string): Promise<void>;
+  setItemStatus(itemId: string, status: string): Promise<void>;
+  itemByPlaidId(plaidItemId: string): Promise<Item | null>;
+  upsertAccounts(rows: Omit<Account, 'id'>[]): Promise<void>;
+  listAccounts(userId: string): Promise<Account[]>;
+  upsertSubscription(sub: Subscription): Promise<void>;
+  getSubscription(userId: string): Promise<Subscription | null>;
+  userByStripeCustomer(customerId: string): Promise<User | null>;
+  getOrCreateUserBySub(sub: string, email: string): Promise<User>;
   audit(userId: string | null, event: string, detail?: string): Promise<void>;
 }
 
@@ -93,6 +103,37 @@ class MemStore implements Store {
   async setCursor(itemId: string, cursor: string) {
     for (const list of this.items.values()) for (const i of list) if (i.id === itemId) i.sync_cursor = cursor;
   }
+  async setItemStatus(itemId: string, status: string) {
+    for (const list of this.items.values()) for (const i of list) if (i.id === itemId) i.status = status;
+  }
+  async itemByPlaidId(plaidItemId: string) {
+    for (const list of this.items.values()) for (const i of list) if (i.plaid_item_id === plaidItemId) return i;
+    return null;
+  }
+  accounts = new Map<string, Account[]>();
+  async upsertAccounts(rows: Omit<Account, 'id'>[]) {
+    for (const r of rows) {
+      const list = this.accounts.get(r.user_id) || [];
+      const ex = list.find(a => a.plaid_account_id === r.plaid_account_id);
+      if (ex) ex.current_balance = r.current_balance;
+      else list.push({ ...r, id: randomUUID() });
+      this.accounts.set(r.user_id, list);
+    }
+  }
+  async listAccounts(userId: string) { return this.accounts.get(userId) || []; }
+  subs = new Map<string, Subscription>();
+  async upsertSubscription(sub: Subscription) { this.subs.set(sub.user_id, sub); }
+  async getSubscription(userId: string) { return this.subs.get(userId) || null; }
+  async userByStripeCustomer(customerId: string) {
+    for (const u of this.users.values()) if (u.stripe_customer_id === customerId) return u;
+    return null;
+  }
+  async getOrCreateUserBySub(sub: string, email: string) {
+    for (const u of this.users.values()) if ((u as never as { entra_sub?: string }).entra_sub === sub) return u;
+    const u = await this.getOrCreateUser(email);
+    (u as never as { entra_sub?: string }).entra_sub = sub;
+    return u;
+  }
   async audit(user_id: string | null, event: string, detail?: string) {
     this.auditLog.push({ user_id, event, detail, at: new Date().toISOString() });
   }
@@ -108,8 +149,15 @@ class PgStore implements Store {
   pool: pg.Pool;
   constructor(url: string) { this.pool = new pg.Pool({ connectionString: url }); }
   async migrate() {
+    // INC-5: track applied migrations so non-idempotent files never double-run.
+    await this.pool.query(`CREATE TABLE IF NOT EXISTS schema_migrations (filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
+    const applied = new Set((await this.pool.query(`SELECT filename FROM schema_migrations`)).rows.map((r: { filename: string }) => r.filename));
     const dir = join(dirname(fileURLToPath(import.meta.url)), 'migrations');
-    for (const f of readdirSync(dir).sort()) await this.pool.query(readFileSync(join(dir, f), 'utf8'));
+    for (const f of readdirSync(dir).sort()) {
+      if (applied.has(f)) continue;
+      await this.pool.query(readFileSync(join(dir, f), 'utf8'));
+      await this.pool.query(`INSERT INTO schema_migrations(filename) VALUES($1)`, [f]);
+    }
   }
   private q = (text: string, vals?: unknown[]) => this.pool.query(text, vals as never[]);
   async getOrCreateUser(email: string) {
@@ -120,11 +168,18 @@ class PgStore implements Store {
   async setPlan(u: string, p: string, sc?: string) { await this.q(`UPDATE users SET plan=$2, stripe_customer_id=COALESCE($3,stripe_customer_id) WHERE id=$1`, [u, p, sc || null]); }
   async deleteUser(u: string) { await this.q(`DELETE FROM users WHERE id=$1`, [u]); }
   async insertTx(rows: Omit<Tx, 'id'>[]) {
-    for (const r of rows)
-      await this.q(`INSERT INTO transactions(user_id,date,name,merchant,amount,balance,category,source,plaid_transaction_id)
-                    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(plaid_transaction_id) DO NOTHING`,
+    let n = 0;
+    for (const r of rows) {
+      // BUG-2: CSV rows (NULL plaid id) dedupe via the partial unique index idx_tx_csv_dedup.
+      const conflict = r.plaid_transaction_id
+        ? 'ON CONFLICT(plaid_transaction_id) DO NOTHING'
+        : 'ON CONFLICT(user_id, date, amount, name) WHERE plaid_transaction_id IS NULL DO NOTHING';
+      const res = await this.q(`INSERT INTO transactions(user_id,date,name,merchant,amount,balance,category,source,plaid_transaction_id)
+                    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ${conflict}`,
         [r.user_id, r.date, r.name, r.merchant, r.amount, r.balance, r.category, r.source, r.plaid_transaction_id || null]);
-    return rows.length;
+      n += res.rowCount || 0;
+    }
+    return n;
   }
   async allTx(u: string, from?: string) {
     const r = await this.q(`SELECT id,user_id,to_char(date,'YYYY-MM-DD') date,name,merchant,amount::float,balance::float,category,source FROM transactions WHERE user_id=$1 ${from ? 'AND date > $2' : ''} ORDER BY date`, from ? [u, from] : [u]);
@@ -167,6 +222,30 @@ class PgStore implements Store {
   async removeItem(u: string, id: string) { await this.q(`DELETE FROM plaid_items WHERE user_id=$1 AND id=$2`, [u, id]); }
   async countItems(u: string) { return +(await this.q(`SELECT count(*) c FROM plaid_items WHERE user_id=$1`, [u])).rows[0].c; }
   async setCursor(id: string, c: string) { await this.q(`UPDATE plaid_items SET sync_cursor=$2 WHERE id=$1`, [id, c]); }
+  async setItemStatus(id: string, st: string) { await this.q(`UPDATE plaid_items SET status=$2 WHERE id=$1`, [id, st]); }
+  async itemByPlaidId(pid: string) { return (await this.q(`SELECT * FROM plaid_items WHERE plaid_item_id=$1`, [pid])).rows[0] || null; }
+  async upsertAccounts(rows: Omit<Account, 'id'>[]) {
+    for (const r of rows)
+      await this.q(`INSERT INTO accounts(item_id,user_id,plaid_account_id,name,mask,type,current_balance)
+                    VALUES($1,$2,$3,$4,$5,$6,$7)
+                    ON CONFLICT(plaid_account_id) DO UPDATE SET current_balance=EXCLUDED.current_balance, name=EXCLUDED.name`,
+        [r.item_id, r.user_id, r.plaid_account_id, r.name, r.mask, r.type, r.current_balance]);
+  }
+  async listAccounts(u: string) { return (await this.q(`SELECT id,item_id,user_id,plaid_account_id,name,mask,type,current_balance::float FROM accounts WHERE user_id=$1`, [u])).rows; }
+  async upsertSubscription(sub: Subscription) {
+    await this.q(`INSERT INTO subscriptions(user_id,stripe_subscription_id,plan,status,current_period_end) VALUES($1,$2,$3,$4,$5)
+                  ON CONFLICT(user_id) DO UPDATE SET stripe_subscription_id=$2, plan=$3, status=$4, current_period_end=$5`,
+      [sub.user_id, sub.stripe_subscription_id, sub.plan, sub.status, sub.current_period_end]);
+  }
+  async getSubscription(u: string) { return (await this.q(`SELECT * FROM subscriptions WHERE user_id=$1`, [u])).rows[0] || null; }
+  async userByStripeCustomer(c: string) { return (await this.q(`SELECT id,email,display_name,plan,stripe_customer_id FROM users WHERE stripe_customer_id=$1`, [c])).rows[0] || null; }
+  async getOrCreateUserBySub(sub: string, email: string) {
+    const r = await this.q(`SELECT id,email,display_name,plan,stripe_customer_id FROM users WHERE entra_subject_id=$1`, [sub]);
+    if (r.rows[0]) return r.rows[0];
+    const u = await this.getOrCreateUser(email);
+    await this.q(`UPDATE users SET entra_subject_id=$2 WHERE id=$1`, [u.id, sub]);
+    return u;
+  }
   async audit(u: string | null, e: string, d?: string) { await this.q(`INSERT INTO audit_log(user_id,event,detail) VALUES($1,$2,$3)`, [u, e, d || null]); }
 }
 

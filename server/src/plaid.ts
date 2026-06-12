@@ -3,6 +3,8 @@ import { cfg } from './config.js';
 import { classify, merchant, cleanDesc } from './classifier.js';
 import type { Store } from './store.js';
 import { encrypt } from './crypto.js';
+import { createHash } from 'crypto';
+import { jwtVerify, importJWK, decodeProtectedHeader, type JWK } from 'jose';
 
 interface PlaidTxn { transaction_id: string; date: string; name: string; amount: number; pending: boolean; }
 
@@ -54,8 +56,44 @@ export const Plaid = {
   async removeItem(accessToken: string) {
     if (cfg.plaid.mock) return;
     await plaidPost('/item/remove', { access_token: accessToken });
+  },
+  // INC-2: pull account names + live balances alongside transactions.
+  async getAccounts(accessToken: string): Promise<Array<{ account_id: string; name: string; mask: string; type: string; balance: number }>> {
+    if (cfg.plaid.mock) {
+      return [
+        { account_id: 'acc-mock-chk-' + accessToken.slice(-6), name: 'Everyday Checking', mask: '3131', type: 'checking', balance: 2483.12 },
+        { account_id: 'acc-mock-sav-' + accessToken.slice(-6), name: 'Kasasa Saver', mask: '4318', type: 'savings', balance: 5120.55 }
+      ];
+    }
+    const j = await plaidPost('/accounts/balance/get', { access_token: accessToken });
+    return (j.accounts || []).map((a: { account_id: string; name: string; mask: string; subtype: string; balances: { current: number } }) =>
+      ({ account_id: a.account_id, name: a.name, mask: a.mask, type: a.subtype, balance: a.balances?.current ?? 0 }));
   }
 };
+
+// SEC-3: verify the Plaid-Verification JWT (ES256) on every webhook.
+// Plaid signs webhooks with a rotating key fetched from /webhook_verification_key/get.
+const plaidKeyCache = new Map<string, { jwk: JWK; at: number }>();
+export async function verifyPlaidWebhook(verificationJwt: string | undefined, rawBody: string): Promise<boolean> {
+  if (cfg.plaid.mock) return true; // mock mode: webhooks only reachable in local dev
+  if (!verificationJwt) return false;
+  try {
+    const header = decodeProtectedHeader(verificationJwt);
+    if (header.alg !== 'ES256' || !header.kid) return false;
+    let cached = plaidKeyCache.get(header.kid);
+    if (!cached || Date.now() - cached.at > 5 * 60_000) {
+      const j = await plaidPost('/webhook_verification_key/get', { key_id: header.kid });
+      cached = { jwk: j.key, at: Date.now() };
+      plaidKeyCache.set(header.kid, cached);
+    }
+    const key = await importJWK(cached.jwk, 'ES256');
+    const { payload } = await jwtVerify(verificationJwt, key, { maxTokenAge: '5 min' });
+    const bodyHash = createHash('sha256').update(rawBody, 'utf8').digest('hex');
+    return payload['request_body_sha256'] === bodyHash;
+  } catch {
+    return false;
+  }
+}
 
 export async function runItemSync(store: Store, userId: string, itemDbId: string, accessToken: string, cursor: string | null) {
   const overrides = await store.getOverrides(userId);
@@ -69,6 +107,12 @@ export async function runItemSync(store: Store, userId: string, itemDbId: string
   });
   await store.insertTx(rows);
   await store.setCursor(itemDbId, next_cursor);
+  // INC-2: refresh account list + balances on every sync.
+  const accts = await Plaid.getAccounts(accessToken);
+  await store.upsertAccounts(accts.map(a => ({
+    item_id: itemDbId, user_id: userId, plaid_account_id: a.account_id,
+    name: a.name, mask: a.mask, type: a.type, current_balance: a.balance
+  })));
   return rows.length;
 }
 

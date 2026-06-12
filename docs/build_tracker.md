@@ -182,3 +182,44 @@ Legend: [x] built & verified here · [B] blocked — needs Colin's accounts/cred
 - [B] SOC 2 / GLBA program docs, pen test, legal review
 
 **Phase 4 complete — 2026-06-11.** Everything buildable without external accounts is built and verified.
+
+---
+
+# Phase 5 — Code Review Remediation (osborn-finance-flaws.txt, 17 issues)
+
+## Bugs
+- [x] BUG-1 Plan now derived from Stripe price id (`planFromPriceId`), with subscription fetch for checkout events — never defaults to 'personal'
+- [x] BUG-2 Partial unique index `idx_tx_csv_dedup` (migration 002) + CSV inserts use that conflict target; insertTx returns actual inserted count
+- [x] BUG-3 Stripe webhook registered with `express.raw()` BEFORE the JSON parser — signature verified against true raw bytes
+
+## Security
+- [x] SEC-1 Dedicated 5 req/min/user rate limiter on /api/plaid/link-token AND /api/plaid/exchange (+ plan-limit re-check on exchange) — verified 429 in tests
+- [x] SEC-2 Startup guard: production without TOKEN_ENC_KEY refuses to boot (enforced in crypto.ts AND index.ts)
+- [x] SEC-3 Plaid webhook now verifies the Plaid-Verification ES256 JWT (key fetched from /webhook_verification_key/get, 5-min cache, body-hash check) before any action
+- [x] SEC-4 Stripe webhook HMAC-SHA256 verification (timing-safe compare, 5-min timestamp tolerance) — forged-upgrade exploit closed, tested with valid/forged/stale signatures
+
+## Incomplete features
+- [x] INC-1 customer.subscription.updated / deleted / invoice.payment_failed all handled (plan change, downgrade to free, past_due flag)
+- [x] INC-2 Accounts now synced on every item sync (/accounts/balance/get + mock), stored, exposed at GET /api/accounts — tested
+- [x] INC-3 subscriptions table wired: upserted on every billing event, exposed on /api/me — tested
+- [x] INC-4 Plaid webhook fully implemented: item lookup by plaid_item_id, sync dispatch, ITEM_LOGIN_REQUIRED → status 'login_required'
+- [x] INC-5 schema_migrations tracking table — migrations never double-run
+
+## Logic
+- [x] LOG-1 avgMonthly design intent documented (stable trailing-12-month baseline, deliberate)
+- [x] LOG-2 Income-classification simplification documented (refund-splitting = Phase 6, needs purchase matching)
+
+## Infrastructure
+- [x] INFRA-1 Full VNet: 3 subnets (app /26 delegated Web, db /28 delegated Postgres, private-endpoints /28), NSGs with explicit allow/deny on 5432/443 + deny-all, private DNS zones (postgres + vaultcore) with VNet links, Postgres publicNetworkAccess Disabled, App Service VNet-integrated with route-all
+- [x] INFRA-2 Static Web App resource added for the SPA (spaHost output)
+- [~] INFRA-3 HA still Disabled by design pre-revenue — now tracked here as backlog: **enable ZoneRedundant at ~$2k MRR**
+- [x] INFRA-4 infra/post-deploy.sql creates least-privilege osfinapp user (CRUD only); README + Bicep comments mandate DATABASE_URL uses osfinapp, admin reserved for humans; Entra-managed-identity auth noted as the better end state
+- [x] INFRA-5 Entra External ID JWT verification implemented (jose remote JWKS, audience + expiry checks, sub→user mapping) — needs only the tenant + two env vars to go live
+
+## Build/config
+- [x] CFG-1/CFG-2 N/A in canonical repo — no start.ts exists; single entry point is the isMain block in src/index.ts (the reviewed copy had a locally added start.ts)
+
+## Verification
+- [x] 17/17 tests green including 7 new remediation tests (signature accept/reject/stale, plan derivation, lifecycle events, forged-webhook no-upgrade, rate-limit 429, accounts sync, subscription on /api/me) · tsc clean
+
+**Phase 5 complete — 2026-06-11.**

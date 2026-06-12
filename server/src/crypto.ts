@@ -1,6 +1,10 @@
 // Envelope encryption for Plaid access tokens (S2). Prod: TOKEN_ENC_KEY from Key Vault.
 import { createCipheriv, createDecipheriv, randomBytes } from 'crypto';
 import { cfg } from './config.js';
+// SEC-2: a known fallback key is acceptable ONLY in dev. Production must fail fast.
+if (cfg.authMode !== 'dev' && !cfg.tokenEncKey) {
+  throw new Error('TOKEN_ENC_KEY must be set when AUTH_MODE is not dev — refusing to start with the dev fallback key');
+}
 const key = cfg.tokenEncKey ? Buffer.from(cfg.tokenEncKey, 'base64') : Buffer.alloc(32, 7); // dev-only fallback
 export function encrypt(plain: string): string {
   const iv = randomBytes(12);
