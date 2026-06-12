@@ -2,8 +2,10 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
+import { createHash } from 'crypto';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
-import { cfg, PLAN_LIMITS } from './config.js';
+import { cfg, PLAN_LIMITS, assertSecureConfig } from './config.js';
+import { schemas, parse } from './validate.js';
 import { makeStore, type Store, type User } from './store.js';
 import { classify, merchant, cleanDesc, ALL_CATS } from './classifier.js';
 import { parseCSV, autoMap, parseDateStr, parseAmtStr } from './csv.js';
@@ -14,9 +16,20 @@ import { decrypt } from './crypto.js';
 
 export async function buildApp(store: Store) {
   const app = express();
+  // Behind Front Door / a reverse proxy: trust the first XFF hop so req.ip and
+  // rate-limit keys reflect the real client (L3).
+  app.set('trust proxy', 1);
   app.use(helmet());
   app.use(cors({ origin: cfg.appBaseUrl }));
   app.use(rateLimit({ windowMs: 60_000, max: 300 }));
+
+  // L3: salted hash of the client IP for audit correlation. Prefers the leftmost
+  // X-Forwarded-For entry (the original client) when behind a proxy.
+  const ipHash = (req: express.Request): string => {
+    const xff = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+    const ip = xff || req.ip || 'unknown';
+    return createHash('sha256').update(cfg.auditIpSalt + '|' + ip).digest('hex').slice(0, 32);
+  };
 
   /* ================= WEBHOOKS =================
      Registered BEFORE express.json() so handlers receive the RAW body —
@@ -68,7 +81,7 @@ export async function buildApp(store: Store) {
           await store.audit(u.id, 'payment_failed');
         }
       }
-    } catch (e) { console.error('stripe webhook error', e); }
+    } catch (e) { console.error('stripe webhook error:', (e as Error).message); } // L1: message only, never raw provider bodies
     res.json({ received: true });
   });
 
@@ -89,7 +102,7 @@ export async function buildApp(store: Store) {
         await store.setItemStatus(item.id, 'login_required');
         await store.audit(item.user_id, 'item_login_required', item.institution_name);
       }
-    } catch (e) { console.error('plaid webhook error', e); }
+    } catch (e) { console.error('plaid webhook error:', (e as Error).message); } // L1: message only, never raw provider bodies
     res.json({ received: true });
   });
 
@@ -98,8 +111,8 @@ export async function buildApp(store: Store) {
   app.use(express.text({ type: 'text/csv', limit: '12mb' }));
 
   // ---- auth (S8/S9): dev header mode, or Entra External ID JWT (INFRA-5) ----
-  const jwks = cfg.authMode === 'entra' && process.env.ENTRA_JWKS_URL
-    ? createRemoteJWKSet(new URL(process.env.ENTRA_JWKS_URL)) : null;
+  const jwks = cfg.authMode === 'entra' && cfg.entra.jwksUrl
+    ? createRemoteJWKSet(new URL(cfg.entra.jwksUrl)) : null;
   app.use('/api', async (req, res, next) => {
     if (req.path === '/health' || req.path === '/plans') return next();
     if (cfg.authMode === 'dev') {
@@ -113,7 +126,10 @@ export async function buildApp(store: Store) {
     const token = (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
     if (!token) return res.status(401).json({ error: 'missing bearer token' });
     try {
-      const { payload } = await jwtVerify(token, jwks, { audience: process.env.ENTRA_AUDIENCE });
+      // H2: pin BOTH audience and issuer. Audience alone does not bind the token
+      // to our tenant/authority; issuer validation rejects validly-signed tokens
+      // minted for our audience by any other tenant on a multi-tenant key set.
+      const { payload } = await jwtVerify(token, jwks, { audience: cfg.entra.audience, issuer: cfg.entra.issuer });
       const sub = String(payload.sub), email = String(payload.email || payload.preferred_username || sub + '@entra.local');
       (req as never as { user: User }).user = await store.getOrCreateUserBySub(sub, email);
       return next();
@@ -123,7 +139,10 @@ export async function buildApp(store: Store) {
   });
   const u = (req: express.Request): User => (req as never as { user: User }).user;
 
-  app.get('/api/health', (_q, res) => res.json({ ok: true, mode: { db: !!cfg.databaseUrl, plaid: cfg.plaid.mock ? 'mock' : cfg.plaid.env, stripe: cfg.stripe.mock ? 'mock' : 'live', auth: cfg.authMode } }));
+  // L2: the anonymous probe reveals nothing about configuration.
+  app.get('/api/health', (_q, res) => res.json({ ok: true }));
+  // Detailed mode is gated behind auth (not in the middleware skip list above).
+  app.get('/api/health/details', (_q, res) => res.json({ ok: true, mode: { db: !!cfg.databaseUrl, plaid: cfg.plaid.mock ? 'mock' : cfg.plaid.env, stripe: cfg.stripe.mock ? 'mock' : 'live', auth: cfg.authMode } }));
   app.get('/api/plans', (_q, res) => res.json(Object.entries(PLAN_PRICES).map(([id, p]) => ({ id, label: p.label, amountCents: p.amount }))));
   app.get('/api/me', async (req, res) => {
     const items = await store.listItems(u(req).id);
@@ -136,7 +155,7 @@ export async function buildApp(store: Store) {
   app.delete('/api/me', async (req, res) => {
     for (const it of await store.listItems(u(req).id)) { try { await Plaid.removeItem(decrypt(it.access_token_ciphertext)); } catch { /* item may be gone */ } }
     await store.deleteUser(u(req).id);
-    await store.audit(null, 'account_deleted', u(req).email);
+    await store.audit(null, 'account_deleted', u(req).email, ipHash(req));
     res.json({ deleted: true });
   });
 
@@ -146,6 +165,10 @@ export async function buildApp(store: Store) {
     if (!text) return res.status(400).json({ error: 'send CSV as text/csv body or {csv}' });
     const rows = parseCSV(text);
     if (rows.length < 2) return res.status(422).json({ error: 'no data rows found' });
+    // M6: cap row count to bound per-request memory/CPU and DB load.
+    const MAX_CSV_ROWS = 20000;
+    if (rows.length - 1 > MAX_CSV_ROWS)
+      return res.status(413).json({ error: `too many rows: ${rows.length - 1} (max ${MAX_CSV_ROWS}). Split the file and re-import.` });
     const map = autoMap(rows);
     if (map.date < 0 || map.desc < 0 || (map.amt < 0 && map.debit < 0 && map.credit < 0))
       return res.status(422).json({ error: 'could not detect date/description/amount columns', detected: map });
@@ -173,27 +196,30 @@ export async function buildApp(store: Store) {
       out.push({ user_id: u(req).id, date, name: cleanDesc(raw), merchant: merch, amount: amt, balance: map.bal >= 0 ? parseAmtStr(r[map.bal]) : null, category, source: 'csv', plaid_transaction_id: null });
     }
     const inserted = await store.insertTx(out);
-    await store.audit(u(req).id, 'csv_import', `${inserted} rows`);
+    await store.audit(u(req).id, 'csv_import', `${inserted} rows`, ipHash(req));
     res.json({ imported: inserted, skipped, duplicates: dupes });
   });
 
   // ---- transactions (F9) ----
   app.get('/api/transactions', async (req, res) => {
-    const q = req.query;
-    const days = +(q.days || 0);
+    const v = parse(schemas.transactionsQuery, req.query); // I3
+    if (!v.ok) return res.status(400).json({ error: v.error });
+    const q = v.data;
+    const days = q.days || 0;
     const all = await store.allTx(u(req).id);
     const latest = all.length ? all[all.length - 1].date : new Date().toISOString().slice(0, 10);
     const from = days ? new Date(Date.parse(latest) - days * 864e5).toISOString().slice(0, 10) : undefined;
     const r = await store.listTx(u(req).id, {
-      from, cat: q.cat as string, flow: q.flow as string, search: q.q as string,
-      limit: Math.min(200, +(q.limit || 25)), offset: +(q.offset || 0),
-      sort: (q.sort as string) || 'date', dir: (q.dir as string) || 'desc'
+      from, cat: q.cat, flow: q.flow, search: q.q,
+      limit: q.limit || 25, offset: q.offset || 0,
+      sort: q.sort || 'date', dir: q.dir || 'desc'
     });
     res.json(r);
   });
   app.post('/api/transactions/recategorize', async (req, res) => {
-    const { merchant: m, category } = req.body || {};
-    if (!m || !ALL_CATS.includes(category)) return res.status(400).json({ error: 'merchant + valid category required' });
+    const v = parse(schemas.recategorize, req.body); // I3
+    if (!v.ok) return res.status(400).json({ error: v.error });
+    const { merchant: m, category } = v.data;
     await store.setOverride(u(req).id, m, category);
     const n = await store.setCategoryByMerchant(u(req).id, m, category);
     res.json({ updated: n });
@@ -227,8 +253,9 @@ export async function buildApp(store: Store) {
     res.json(await Plaid.createLinkToken(u(req).id));
   });
   app.post('/api/plaid/exchange', linkLimiter, async (req, res) => {
-    const { public_token } = req.body || {};
-    if (!public_token) return res.status(400).json({ error: 'public_token required' });
+    const v = parse(schemas.plaidExchange, req.body); // I3
+    if (!v.ok) return res.status(400).json({ error: v.error });
+    const { public_token } = v.data;
     const limit = PLAN_LIMITS[u(req).plan]?.items ?? 0;
     if (await store.countItems(u(req).id) >= limit)
       return res.status(402).json({ error: 'plan limit reached', upgrade: true });
@@ -238,7 +265,7 @@ export async function buildApp(store: Store) {
       access_token_ciphertext: encryptToken(ex.access_token), sync_cursor: null, status: 'healthy'
     });
     const n = await runItemSync(store, u(req).id, item.id, ex.access_token, null);
-    await store.audit(u(req).id, 'plaid_link', ex.institution);
+    await store.audit(u(req).id, 'plaid_link', ex.institution, ipHash(req));
     res.json({ item: { id: item.id, institution: ex.institution }, imported: n });
   });
   app.post('/api/plaid/sync', async (req, res) => {
@@ -252,14 +279,15 @@ export async function buildApp(store: Store) {
     if (!it) return res.status(404).json({ error: 'not found' });
     try { await Plaid.removeItem(decrypt(it.access_token_ciphertext)); } catch { /* already removed */ }
     await store.removeItem(u(req).id, it.id);
-    await store.audit(u(req).id, 'plaid_unlink', it.institution_name);
+    await store.audit(u(req).id, 'plaid_unlink', it.institution_name, ipHash(req));
     res.json({ removed: true });
   });
 
   // ---- Stripe (F13) ----
   app.post('/api/billing/checkout', async (req, res) => {
-    const { plan } = req.body || {};
-    if (!PLAN_PRICES[plan]) return res.status(400).json({ error: 'plan must be personal|family|enterprise' });
+    const v = parse(schemas.checkout, req.body); // I3
+    if (!v.ok) return res.status(400).json({ error: v.error });
+    const { plan } = v.data;
     const out = await Billing.createCheckout(u(req).id, u(req).email, plan);
     if (out.mock) {
       await store.setPlan(u(req).id, plan, 'cus_mock_' + u(req).id.slice(0, 8));
@@ -277,9 +305,11 @@ export async function buildApp(store: Store) {
 
 const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].split(/[\\/]/).pop()!); // split on / AND \\ (Windows)
 if (isMain) {
-  // SEC-2: fail fast if production is missing its encryption key (also enforced in crypto.ts).
-  if (cfg.authMode !== 'dev' && !cfg.tokenEncKey) {
-    console.error('FATAL: TOKEN_ENC_KEY must be set in production'); process.exit(1);
+  // H1/H2/SEC-2: refuse to boot on any fatal auth/crypto misconfiguration.
+  const problems = assertSecureConfig();
+  if (problems.length) {
+    for (const p of problems) console.error('FATAL config:', p);
+    process.exit(1);
   }
   const store = await makeStore();
   const app = await buildApp(store);

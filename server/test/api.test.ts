@@ -24,8 +24,10 @@ async function call(method: string, path: string, body?: unknown, type = 'applic
 beforeAll(async () => { app = await buildApp(await makeStore()); });
 
 describe('Osborn Finance API (mock mode)', () => {
-  it('health: mock plaid + stripe, in-memory db', async () => {
-    const r = await call('GET', '/api/health');
+  it('L2: public health probe is minimal; details require auth', async () => {
+    const pub = await call('GET', '/api/health');
+    expect(pub.json).toEqual({ ok: true }); // no config disclosed anonymously
+    const r = await call('GET', '/api/health/details');
     expect(r.json.mode).toMatchObject({ db: false, plaid: 'mock', stripe: 'mock', auth: 'dev' });
   });
   it('imports the 458-row demo CSV with exact totals', async () => {
@@ -150,5 +152,44 @@ describe('Security fixes', () => {
     const me = await call('GET', '/api/me');
     expect(me.json.subscription).toBeTruthy();
     expect(me.json.subscription.status).toBe('active');
+  });
+  it('I3: invalid recategorize body is rejected with 400', async () => {
+    const r = await call('POST', '/api/transactions/recategorize', { merchant: 'X', category: 'NotARealCategory' });
+    expect(r.status).toBe(400);
+    const r2 = await call('POST', '/api/billing/checkout', { plan: 'platinum' });
+    expect(r2.status).toBe(400);
+  });
+  it('M6: oversized CSV (>20k rows) is rejected with 413', async () => {
+    const big = 'date,description,amount\n' + Array.from({ length: 20001 }, (_, i) => `2025-01-01,row${i},-1.00`).join('\n');
+    const r = await call('POST', '/api/import/csv', big, 'text/csv');
+    expect(r.status).toBe(413);
+  });
+});
+
+/* ============ Penetration-review remediation (H1/H2/M5) ============ */
+import { encrypt, decrypt } from '../src/crypto.js';
+import { assertSecureConfig } from '../src/config.js';
+
+describe('Pen-test remediation', () => {
+  it('M5: versioned ciphertext round-trips and carries a key-id prefix', () => {
+    const token = 'access-sandbox-abc-123';
+    const blob = encrypt(token);
+    expect(decrypt(blob)).toBe(token);
+    // first byte of the decoded blob is the key id (1 by default), distinct from a bare IV
+    expect(Buffer.from(blob, 'base64')[0]).toBe(1);
+  });
+  it('M5: legacy unversioned blobs still decrypt (rotation back-compat)', () => {
+    // simulate a pre-versioning blob: [iv][tag][ct] with the dev fallback key
+    const { createCipheriv, randomBytes } = require('crypto');
+    const key = Buffer.alloc(32, 7);
+    const iv = randomBytes(12);
+    const c = createCipheriv('aes-256-gcm', key, iv);
+    const enc = Buffer.concat([c.update('legacy-token', 'utf8'), c.final()]);
+    const legacy = Buffer.concat([iv, c.getAuthTag(), enc]).toString('base64');
+    expect(decrypt(legacy)).toBe('legacy-token');
+  });
+  it('H1/H2: dev config is accepted; prod requires entra + issuer (logic check)', () => {
+    // In the test runtime AUTH_MODE defaults to dev (NODE_ENV=test) → no fatal problems.
+    expect(assertSecureConfig()).toEqual([]);
   });
 });

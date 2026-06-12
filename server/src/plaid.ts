@@ -14,7 +14,13 @@ async function plaidPost(path: string, body: Record<string, unknown>) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ client_id: cfg.plaid.clientId, secret: cfg.plaid.secret, ...body })
   });
-  if (!res.ok) throw new Error(`plaid ${path} ${res.status}: ${await res.text()}`);
+  // L1: do NOT fold the raw provider body into the error — it can echo request
+  // data / identifiers that then land in logs. Surface status + a Plaid error code only.
+  if (!res.ok) {
+    let code = '';
+    try { code = ((await res.json()) as { error_code?: string }).error_code || ''; } catch { /* non-JSON body */ }
+    throw new Error(`plaid ${path} failed: ${res.status}${code ? ` (${code})` : ''}`);
+  }
   return res.json();
 }
 

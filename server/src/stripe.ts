@@ -9,7 +9,13 @@ async function stripeApi(method: string, path: string, form?: Record<string, str
     headers: { Authorization: `Bearer ${cfg.stripe.secretKey}`, 'Content-Type': 'application/x-www-form-urlencoded' },
     body: form ? new URLSearchParams(form) : undefined
   });
-  if (!res.ok) throw new Error(`stripe ${path} ${res.status}: ${await res.text()}`);
+  // L1: don't fold the raw Stripe body into the error (avoids leaking request
+  // echoes / identifiers into logs). Surface status + Stripe error code only.
+  if (!res.ok) {
+    let code = '';
+    try { code = ((await res.json()) as { error?: { code?: string } }).error?.code || ''; } catch { /* non-JSON body */ }
+    throw new Error(`stripe ${path} failed: ${res.status}${code ? ` (${code})` : ''}`);
+  }
   return res.json();
 }
 

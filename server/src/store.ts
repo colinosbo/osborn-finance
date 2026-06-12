@@ -33,7 +33,7 @@ export interface Store {
   getSubscription(userId: string): Promise<Subscription | null>;
   userByStripeCustomer(customerId: string): Promise<User | null>;
   getOrCreateUserBySub(sub: string, email: string): Promise<User>;
-  audit(userId: string | null, event: string, detail?: string): Promise<void>;
+  audit(userId: string | null, event: string, detail?: string, ipHash?: string): Promise<void>;
 }
 
 /* ---------------- in-memory store ---------------- */
@@ -42,7 +42,7 @@ class MemStore implements Store {
   tx = new Map<string, Tx[]>();
   overrides = new Map<string, Record<string, string>>();
   items = new Map<string, Item[]>();
-  auditLog: Array<{ user_id: string | null; event: string; detail?: string; at: string }> = [];
+  auditLog: Array<{ user_id: string | null; event: string; detail?: string; ip_hash?: string; at: string }> = [];
 
   async getOrCreateUser(email: string) {
     for (const u of this.users.values()) if (u.email === email) return u;
@@ -134,8 +134,8 @@ class MemStore implements Store {
     (u as never as { entra_sub?: string }).entra_sub = sub;
     return u;
   }
-  async audit(user_id: string | null, event: string, detail?: string) {
-    this.auditLog.push({ user_id, event, detail, at: new Date().toISOString() });
+  async audit(user_id: string | null, event: string, detail?: string, ip_hash?: string) {
+    this.auditLog.push({ user_id, event, detail, ip_hash, at: new Date().toISOString() });
   }
 }
 
@@ -168,15 +168,31 @@ class PgStore implements Store {
   async setPlan(u: string, p: string, sc?: string) { await this.q(`UPDATE users SET plan=$2, stripe_customer_id=COALESCE($3,stripe_customer_id) WHERE id=$1`, [u, p, sc || null]); }
   async deleteUser(u: string) { await this.q(`DELETE FROM users WHERE id=$1`, [u]); }
   async insertTx(rows: Omit<Tx, 'id'>[]) {
+    if (!rows.length) return 0;
+    // M6: batch multi-row INSERTs instead of one query per row. Rows split by
+    // dedupe strategy: plaid rows conflict on plaid_transaction_id; CSV rows
+    // (NULL plaid id) dedupe via the partial unique index idx_tx_csv_dedup (BUG-2).
+    const plaidRows = rows.filter(r => r.plaid_transaction_id);
+    const csvRows = rows.filter(r => !r.plaid_transaction_id);
     let n = 0;
-    for (const r of rows) {
-      // BUG-2: CSV rows (NULL plaid id) dedupe via the partial unique index idx_tx_csv_dedup.
-      const conflict = r.plaid_transaction_id
-        ? 'ON CONFLICT(plaid_transaction_id) DO NOTHING'
-        : 'ON CONFLICT(user_id, date, amount, name) WHERE plaid_transaction_id IS NULL DO NOTHING';
+    n += await this.insertTxBatch(plaidRows, 'ON CONFLICT(plaid_transaction_id) DO NOTHING');
+    n += await this.insertTxBatch(csvRows, 'ON CONFLICT(user_id, date, amount, name) WHERE plaid_transaction_id IS NULL DO NOTHING');
+    return n;
+  }
+  private async insertTxBatch(rows: Omit<Tx, 'id'>[], conflict: string) {
+    if (!rows.length) return 0;
+    const CHUNK = 1000; // ~9k bound params/statement, well under pg's 65535 limit
+    let n = 0;
+    for (let i = 0; i < rows.length; i += CHUNK) {
+      const chunk = rows.slice(i, i + CHUNK);
+      const vals: unknown[] = [];
+      const tuples = chunk.map((r, j) => {
+        const b = j * 9;
+        vals.push(r.user_id, r.date, r.name, r.merchant, r.amount, r.balance, r.category, r.source, r.plaid_transaction_id || null);
+        return `($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5},$${b + 6},$${b + 7},$${b + 8},$${b + 9})`;
+      });
       const res = await this.q(`INSERT INTO transactions(user_id,date,name,merchant,amount,balance,category,source,plaid_transaction_id)
-                    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ${conflict}`,
-        [r.user_id, r.date, r.name, r.merchant, r.amount, r.balance, r.category, r.source, r.plaid_transaction_id || null]);
+                    VALUES ${tuples.join(',')} ${conflict}`, vals);
       n += res.rowCount || 0;
     }
     return n;
@@ -246,7 +262,7 @@ class PgStore implements Store {
     await this.q(`UPDATE users SET entra_subject_id=$2 WHERE id=$1`, [u.id, sub]);
     return u;
   }
-  async audit(u: string | null, e: string, d?: string) { await this.q(`INSERT INTO audit_log(user_id,event,detail) VALUES($1,$2,$3)`, [u, e, d || null]); }
+  async audit(u: string | null, e: string, d?: string, ipHash?: string) { await this.q(`INSERT INTO audit_log(user_id,event,detail,ip_hash) VALUES($1,$2,$3,$4)`, [u, e, d || null, ipHash || null]); }
 }
 
 export async function makeStore(): Promise<Store> {
