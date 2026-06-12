@@ -275,7 +275,7 @@ export async function buildApp(store: Store) {
   return app;
 }
 
-const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop()!);
+const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].split(/[\\/]/).pop()!); // split on / AND \\ (Windows)
 if (isMain) {
   // SEC-2: fail fast if production is missing its encryption key (also enforced in crypto.ts).
   if (cfg.authMode !== 'dev' && !cfg.tokenEncKey) {

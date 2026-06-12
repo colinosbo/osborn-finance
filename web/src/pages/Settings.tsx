@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { api, getEmail, setEmail } from '../api';
 import type { Toast } from '../App';
 
-export default function Settings({ toast }: { toast: Toast }) {
+export default function Settings({ toast, dark, setDark }: { toast: Toast; dark: boolean; setDark: (v: boolean) => void }) {
   const [me, setMe] = useState<{ email: string; plan: string } | null>(null);
   const [email, setEmailInput] = useState(getEmail());
   useEffect(() => { api<{ email: string; plan: string }>('/api/me').then(setMe); }, []);
@@ -25,7 +25,18 @@ export default function Settings({ toast }: { toast: Toast }) {
   return (
     <>
       <div className="sec-head"><span className="sec-num">07</span><span className="sec-title">Settings</span></div>
-      <div className="sec-sub">Profile, billing, security &amp; data</div>
+      <div className="sec-sub">Appearance, profile, billing, security &amp; data</div>
+      <div className="panel" style={{ marginBottom: 24 }}>
+        <h3>Appearance</h3><div className="psub">How Osborn Finance looks on this device</div>
+        <div className="switchrow">
+          <div className="lab"><b>Dark mode</b><span>Easier on the eyes — on by default</span></div>
+          <div className={'switch' + (dark ? ' on' : '')} role="switch" aria-checked={dark} tabIndex={0}
+            onClick={() => { setDark(!dark); toast(dark ? 'Light mode on' : 'Dark mode on'); }}
+            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { setDark(!dark); } }}>
+            <i />
+          </div>
+        </div>
+      </div>
       <div className="row2">
         <div className="panel">
           <h3>Profile</h3><div className="psub">Dev mode: identity is the email header. Production: Entra External ID with MFA.</div>

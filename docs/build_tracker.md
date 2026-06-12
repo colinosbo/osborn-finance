@@ -70,14 +70,14 @@ Status legend: `[ ]` pending · `[x]` done · `[~]` partial (note attached)
 
 ## Acceptance Criteria
 - [x] AC1 Upload → tailored dashboard in under 60 seconds
-- [x] AC2 Colin's CSV reproduces current build's numbers exactly — verified: 1,115 txns, income $78,095.33, spend $78,355.61, all category totals exact, avg monthly $2,988.71 with the $5,080 payoff auto-detected as an outlier
+- [x] AC2 The 1,115-row reference dataset reproduces the original build's numbers exactly — all income/spend/category totals match, and the one-time loan payoff is auto-detected as an outlier in Avg Monthly Spend
 - [x] AC3 Malformed files always produce readable errors
 - [x] AC4 Zero network requests
 - [x] AC5 All existing functionality intact
 
 ---
 
-**Build complete — 2026-06-11.** All verification ran against the real dataset plus 8 synthetic bank formats, malformed input, recategorize/override persistence, and append-with-dedupe.
+**Build complete — 2026-06-11.** All verification ran against the reference dataset plus 8 synthetic bank formats, malformed input, recategorize/override persistence, and append-with-dedupe.
 
 ---
 
@@ -97,7 +97,7 @@ Status legend: `[ ]` pending · `[x]` done · `[~]` partial (note attached)
 - [x] FR-B5 Chips, highlights, validation update live on every change
 
 ## Step 3 — Synthetic demo data
-- [x] FR-C1 Colin's real CSV fully removed from the file (verified: no real merchants/locations in embedded data)
+- [x] FR-C1 All real personal data fully removed from the file (verified: no real merchants/locations in embedded data)
 - [x] FR-C2 458 synthetic transactions, 12 months, fictional person: biweekly payroll, rent, utilities, subscriptions, groceries, gas, dining, gym, insurance, CC payments, investing — 6.6% savings rate
 - [x] FR-C3 National brands only; "Other" category = 0.00% of demo spend
 - [x] FR-C4 Nav shows "Demo data ·" while sample is loaded
@@ -106,12 +106,12 @@ Status legend: `[ ]` pending · `[x]` done · `[~]` partial (note attached)
 - [x] FR-D1 National-brand rules added (streaming, fast food, gas majors, big-box grocers, insurers, gyms, rideshare)
 - [x] FR-D2 New "Utilities & Bills" category with color, filters, recategorize support
 - [x] FR-D3 Rent rule generalized (apartment/rent/leasing/property keywords)
-- [x] FR-D4 Colin's file still classifies identically — verified exact ($78,095.33 / $78,355.61, 1,115 rows)
+- [x] FR-D4 Reference dataset still classifies identically — verified exact totals across all 1,115 rows
 
 ## Step 5 — Verification
 - [x] FR-E1 Demo CSV skips mapping → clean dashboard, Other = 0.00%
 - [x] FR-E2 Ambiguous "A,B,C" headers → Quick check with amber chips, generate disabled
-- [x] FR-E3 Colin's CSV → straight to dashboard, totals exact
+- [x] FR-E3 Reference dataset → straight to dashboard, totals exact
 - [x] FR-E4 Tracker updated
 
 ## UI
@@ -136,7 +136,7 @@ Status legend: `[ ]` pending · `[x]` done · `[~]` partial (note attached)
 
 # Phase 4 — Enterprise Platform Build (per osborn_finance_enterprise_plan.md)
 
-Legend: [x] built & verified here · [B] blocked — needs Colin's accounts/credentials/budget
+Legend: [x] built & verified · [B] blocked — needs live accounts/credentials/budget
 
 ## Repo & Infrastructure (Plan Phase 0)
 - [x] E1 Monorepo `osborn-finance/` — server + web + infra + README deploy guide + .env.example

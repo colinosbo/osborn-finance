@@ -1,5 +1,5 @@
 import { Routes, Route, NavLink, Link } from 'react-router-dom';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Dashboard from './pages/Dashboard';
 import Accounts from './pages/Accounts';
 import Ledger from './pages/Ledger';
@@ -18,13 +18,18 @@ const TABS = [
   { to: '/advisor', ico: '✦', label: 'Advisor' },
   { to: '/budgets', ico: '🎯', label: 'Budgets' },
   { to: '/reports', ico: '📈', label: 'Reports' },
-  { to: '/plans', ico: '◆', label: 'Plans' },
-  { to: '/settings', ico: '⚙', label: 'Settings' }
+  { to: '/plans', ico: '◆', label: 'Plans' }
 ];
 
 export default function App() {
   const [toast, setToastMsg] = useState('');
   const showToast: Toast = (m) => { setToastMsg(m); setTimeout(() => setToastMsg(''), 3200); };
+  // dark mode — ON by default; persisted per device
+  const [dark, setDark] = useState(() => (localStorage.getItem('of_theme') ?? 'dark') !== 'light');
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+    localStorage.setItem('of_theme', dark ? 'dark' : 'light');
+  }, [dark]);
   return (
     <>
       <nav>
@@ -37,6 +42,11 @@ export default function App() {
               </NavLink>
             ))}
           </div>
+          <div className="navright">
+            <NavLink to="/settings" className={({ isActive }) => 'navtab' + (isActive ? ' active' : '')}>
+              <span className="ico">⚙</span>Settings
+            </NavLink>
+          </div>
         </div>
       </nav>
       <div className="wrap">
@@ -48,7 +58,7 @@ export default function App() {
           <Route path="/budgets" element={<Budgets />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/plans" element={<Plans toast={showToast} />} />
-          <Route path="/settings" element={<Settings toast={showToast} />} />
+          <Route path="/settings" element={<Settings toast={showToast} dark={dark} setDark={setDark} />} />
         </Routes>
       </div>
       {toast && <div className="toastbox">{toast}</div>}

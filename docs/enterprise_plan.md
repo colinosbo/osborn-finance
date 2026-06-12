@@ -1,7 +1,7 @@
 # Osborn Finance — Enterprise Implementation Plan
 
 **From single-file dashboard to a commercial SaaS personal-finance platform.**
-Version 1.0 · June 2026 · Prepared for Colin Osborn
+Version 1.1 · June 2026
 
 ---
 

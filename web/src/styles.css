@@ -1,15 +1,25 @@
 /* Osborn Finance design system — same tokens as the single-file app */
-:root{
+:root, html[data-theme='light']{
   --bg:#f7f5fb; --surface:#fff; --ink:#1b1530; --muted:#675f7e; --faint:#8d86a4;
   --line:#dcd5ee; --hairline:#ebe7f7; --v300:#c4b5fd; --v400:#a78bfa; --v500:#8b5cf6;
   --v600:#7c3aed; --v700:#6d28d9; --green:#188d49; --red:#d92020;
+  --tint:var(--tint); --tint2:var(--tint2); --accentbg:var(--accentbg); --navbg:rgba(249,247,253,.82);
+  --surface2:#f9f7fd; --toastbg:#1b1530; --toastink:#fff;
   --ease:cubic-bezier(.22,.68,.32,1);
 }
+html[data-theme='dark']{
+  --bg:#120e1d; --surface:#1a1427; --ink:#ece8f6; --muted:#a89fc4; --faint:#7d7596;
+  --line:#322a4a; --hairline:#261f3a; --v300:#c4b5fd; --v400:#a78bfa; --v500:#8b5cf6;
+  --v600:#8b5cf6; --v700:#a78bfa; --green:#3ad07f; --red:#ff6b6b;
+  --tint:#241c38; --tint2:#1f1830; --accentbg:#2c2247; --navbg:rgba(18,14,29,.82);
+  --surface2:#1e1730; --toastbg:#ece8f6; --toastink:#120e1d;
+}
+html{color-scheme:light dark}
 *{margin:0;padding:0;box-sizing:border-box;border-radius:0!important}
 body{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','Helvetica Neue',Arial,sans-serif;background:var(--bg);color:var(--ink);font-size:14px;line-height:1.5}
 ::selection{background:var(--v600);color:#fff}
 .grad{background:linear-gradient(120deg,var(--v700),var(--v500) 55%,var(--v300));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;font-style:italic;padding-right:.06em}
-nav{background:rgba(249,247,253,.82);backdrop-filter:saturate(180%) blur(20px);border-bottom:1px solid var(--hairline);position:sticky;top:0;z-index:10}
+nav{background:var(--navbg);backdrop-filter:saturate(180%) blur(20px);border-bottom:1px solid var(--hairline);position:sticky;top:0;z-index:10}
 .nav-inner{max-width:1280px;margin:0 auto;padding:0 32px;height:58px;display:flex;align-items:center;gap:8px}
 .brand{font-size:17px;font-weight:700;letter-spacing:-.02em;cursor:pointer;margin-right:18px;text-decoration:none;color:var(--ink)}
 .navtabs{display:flex;gap:2px;flex:1;overflow-x:auto}
@@ -26,7 +36,7 @@ nav{background:rgba(249,247,253,.82);backdrop-filter:saturate(180%) blur(20px);b
 @media(max-width:1020px){.cards{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:560px){.cards{grid-template-columns:1fr}}
 .card{background:var(--surface);padding:28px;transition:background .2s,box-shadow .2s}
-.card:hover{background:#fdfcff;box-shadow:inset 0 0 0 1px var(--v600)}
+.card:hover{background:var(--tint2);box-shadow:inset 0 0 0 1px var(--v600)}
 .card .label{font-size:11px;font-weight:700;color:var(--faint);text-transform:uppercase;letter-spacing:.12em;margin-bottom:10px}
 .card .value{font-size:31px;font-weight:700;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
 .card .detail{font-size:12px;color:var(--muted);margin-top:10px}
@@ -40,7 +50,7 @@ nav{background:rgba(249,247,253,.82);backdrop-filter:saturate(180%) blur(20px);b
 table{width:100%;border-collapse:collapse;font-size:13px}
 th{text-align:left;padding:11px 12px;color:var(--faint);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.08em;border-bottom:2px solid var(--v600);white-space:nowrap}
 td{padding:10px 12px;border-bottom:1px solid var(--hairline)}
-tr:hover td{background:#f4f0fc}
+tr:hover td{background:var(--tint)}
 .amt{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .btn{border:1px solid var(--line);background:var(--surface);padding:11px 24px;font:inherit;font-size:13px;font-weight:650;cursor:pointer;color:var(--ink);transition:all .2s var(--ease)}
 .btn:hover{border-color:var(--v600);color:var(--v600);background:#faf8ff}
@@ -73,5 +83,18 @@ select:focus,input:focus{border-color:var(--v600);box-shadow:0 0 0 3px rgba(124,
 .advicon{width:34px;height:34px;flex-shrink:0;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,var(--v600),var(--v400));color:#fff;font-weight:700}
 .advtitle{font-weight:650;font-size:14px}
 .advtext{font-size:13px;color:var(--muted);margin-top:2px}
-.advsave{font-size:12px;font-weight:700;color:var(--v600);background:#efe8fc;padding:5px 10px;white-space:nowrap;align-self:flex-start}
-.toastbox{position:fixed;bottom:26px;left:50%;transform:translateX(-50%);background:var(--ink);color:#fff;padding:12px 22px;font-size:13px;z-index:50}
+.advsave{font-size:12px;font-weight:700;color:var(--v600);background:var(--accentbg);padding:5px 10px;white-space:nowrap;align-self:flex-start}
+.toastbox{position:fixed;bottom:26px;left:50%;transform:translateX(-50%);background:var(--toastbg);color:var(--toastink);padding:12px 22px;font-size:13px;z-index:50}
+
+/* Settings pinned to the far right of the nav */
+.navright{margin-left:auto;display:flex;align-items:center}
+.navright .navtab{border-left:1px solid var(--hairline);padding-left:18px}
+/* theme switch */
+.switchrow{display:flex;align-items:center;gap:14px;padding:6px 0}
+.switchrow .lab{flex:1}
+.switchrow .lab b{display:block;font-size:14px}
+.switchrow .lab span{font-size:12px;color:var(--faint)}
+.switch{position:relative;width:46px;height:26px;background:var(--line);cursor:pointer;transition:background .2s;flex-shrink:0}
+.switch.on{background:var(--v600)}
+.switch i{position:absolute;top:3px;left:3px;width:20px;height:20px;background:#fff;transition:left .2s var(--ease)}
+.switch.on i{left:23px}
