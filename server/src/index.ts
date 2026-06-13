@@ -1,3 +1,4 @@
+import './loadenv.js'; // load server/.env (skipped under test) before config reads process.env
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -13,6 +14,8 @@ import { summarize, advise } from './analytics.js';
 import { Plaid, runItemSync, encryptToken, verifyPlaidWebhook } from './plaid.js';
 import { Billing, PLAN_PRICES, parseStripeEvent, verifyStripeSignature, fetchSubscriptionPlan } from './stripe.js';
 import { decrypt } from './crypto.js';
+import { buildReport, buildRangeReport, CADENCES, type Cadence } from './reports.js';
+import { detectRecurring } from './recurring.js';
 
 export async function buildApp(store: Store) {
   const app = express();
@@ -193,7 +196,7 @@ export async function buildApp(store: Store) {
       const merch = merchant(raw);
       let category = classify(raw, amt);
       if (amt < 0 && overrides[merch]) category = overrides[merch];
-      out.push({ user_id: u(req).id, date, name: cleanDesc(raw), merchant: merch, amount: amt, balance: map.bal >= 0 ? parseAmtStr(r[map.bal]) : null, category, source: 'csv', plaid_transaction_id: null });
+      out.push({ user_id: u(req).id, date, name: cleanDesc(raw), merchant: merch, amount: amt, balance: map.bal >= 0 ? parseAmtStr(r[map.bal]) : null, category, source: 'csv', plaid_transaction_id: null, item_id: null });
     }
     const inserted = await store.insertTx(out);
     await store.audit(u(req).id, 'csv_import', `${inserted} rows`, ipHash(req));
@@ -241,6 +244,28 @@ export async function buildApp(store: Store) {
   // ---- accounts (INC-2) ----
   app.get('/api/accounts', async (req, res) => {
     res.json({ items: await store.listItems(u(req).id), accounts: await store.listAccounts(u(req).id) });
+  });
+
+  // ---- subscription tracker: detect recurring charges from transactions ----
+  app.get('/api/recurring', async (req, res) => {
+    res.json(detectRecurring(await store.allTx(u(req).id)));
+  });
+
+  // ---- reports: arbitrary day range (e.g. ?days=30), generated on the spot ----
+  app.get('/api/reports', async (req, res) => {
+    const v = parse(schemas.reportRange, req.query);
+    if (!v.ok) return res.status(400).json({ error: v.error });
+    const tx = await store.allTx(u(req).id);
+    res.json(buildRangeReport(tx, v.data.days || 30, v.data.offset || 0));
+  });
+  // ---- reports: named cadences (weekly | monthly | six_month | year_in_review) ----
+  app.get('/api/reports/:cadence', async (req, res) => {
+    const cadence = req.params.cadence as Cadence;
+    if (!CADENCES.includes(cadence)) return res.status(400).json({ error: 'unknown cadence' });
+    const v = parse(schemas.reportQuery, req.query);
+    if (!v.ok) return res.status(400).json({ error: v.error });
+    const tx = await store.allTx(u(req).id);
+    res.json(buildReport(tx, cadence, v.data.offset || 0));
   });
 
   // ---- Plaid (F3, P1-P5) ----

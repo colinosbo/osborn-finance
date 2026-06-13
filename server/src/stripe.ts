@@ -19,9 +19,11 @@ async function stripeApi(method: string, path: string, form?: Record<string, str
   return res.json();
 }
 
+// NOTE: the internal plan key for the mid tier stays "family" (env var, plan
+// limits, price mapping); only its display label is "Personal+".
 export const PLAN_PRICES: Record<string, { price: string; label: string; amount: number }> = {
-  personal: { price: cfg.stripe.prices.personal, label: 'Personal', amount: 399 },
-  family: { price: cfg.stripe.prices.family, label: 'Family', amount: 1099 },
+  personal: { price: cfg.stripe.prices.personal, label: 'Personal', amount: 499 },
+  family: { price: cfg.stripe.prices.family, label: 'Personal+', amount: 999 },
   enterprise: { price: cfg.stripe.prices.enterprise, label: 'Enterprise', amount: 2499 }
 };
 
@@ -91,9 +93,9 @@ export const Billing = {
       customer_email: email,
       'line_items[0][price]': p.price,
       'line_items[0][quantity]': '1',
-      'subscription_data[trial_period_days]': '14',
+      'subscription_data[trial_period_days]': '7',
       client_reference_id: userId,
-      success_url: `${cfg.appBaseUrl}/settings?billing=success`,
+      success_url: `${cfg.appBaseUrl}/plans?billing=success`,
       cancel_url: `${cfg.appBaseUrl}/plans?billing=cancelled`
     });
     return { url: session.url, mock: false };

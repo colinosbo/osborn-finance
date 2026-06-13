@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, fmt, fmt0, color } from '../api';
+import DashboardLanding from '../DashboardLanding';
 
 interface Summary {
   range: { from: string | null; to: string | null; count: number };
@@ -19,13 +20,7 @@ export default function Dashboard() {
   useEffect(() => { api<Summary>(`/api/summary?days=${days}`).then(setS).catch(e => setErr(e.message)); }, [days]);
   if (err) return <div className="empty">Error: {err}</div>;
   if (!s) return <div className="empty">Loading…</div>;
-  if (!s.range.count) return (
-    <div className="panel" style={{ textAlign: 'center', padding: 60 }}>
-      <h3>No data yet</h3>
-      <p className="psub">Connect a bank or import a CSV to generate your dashboard.</p>
-      <Link to="/accounts" className="btn primary" style={{ textDecoration: 'none' }}>Go to Accounts →</Link>
-    </div>
-  );
+  if (!s.range.count) return <DashboardLanding />;
   const maxCat = s.categories[0]?.total || 1;
   const maxBar = Math.max(...s.monthly.map(m => Math.max(m.in, m.out)), 1);
   return (

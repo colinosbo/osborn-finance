@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto';
 import { cfg } from './config.js';
 
 export interface User { id: string; email: string; display_name: string | null; plan: string; stripe_customer_id: string | null; }
-export interface Tx { id: string; user_id: string; date: string; name: string; merchant: string; amount: number; balance: number | null; category: string; source: string; plaid_transaction_id?: string | null; }
+export interface Tx { id: string; user_id: string; date: string; name: string; merchant: string; amount: number; balance: number | null; category: string; source: string; plaid_transaction_id?: string | null; item_id?: string | null; }
 export interface Item { id: string; user_id: string; plaid_item_id: string; institution_name: string; access_token_ciphertext: string; sync_cursor: string | null; status: string; }
 export interface Account { id: string; item_id: string; user_id: string; plaid_account_id: string; name: string; mask: string; type: string; current_balance: number; }
 export interface Subscription { user_id: string; stripe_subscription_id: string | null; plan: string; status: string; current_period_end: string | null; }
@@ -98,6 +98,9 @@ class MemStore implements Store {
   async listItems(userId: string) { return this.items.get(userId) || []; }
   async removeItem(userId: string, itemId: string) {
     this.items.set(userId, (this.items.get(userId) || []).filter(i => i.id !== itemId));
+    // FIX: also drop that bank's transactions so they stop showing after unlink.
+    this.tx.set(userId, (this.tx.get(userId) || []).filter(t => t.item_id !== itemId));
+    this.accounts.set(userId, (this.accounts.get(userId) || []).filter(a => a.item_id !== itemId));
   }
   async countItems(userId: string) { return (this.items.get(userId) || []).length; }
   async setCursor(itemId: string, cursor: string) {
@@ -187,11 +190,11 @@ class PgStore implements Store {
       const chunk = rows.slice(i, i + CHUNK);
       const vals: unknown[] = [];
       const tuples = chunk.map((r, j) => {
-        const b = j * 9;
-        vals.push(r.user_id, r.date, r.name, r.merchant, r.amount, r.balance, r.category, r.source, r.plaid_transaction_id || null);
-        return `($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5},$${b + 6},$${b + 7},$${b + 8},$${b + 9})`;
+        const b = j * 10;
+        vals.push(r.user_id, r.date, r.name, r.merchant, r.amount, r.balance, r.category, r.source, r.plaid_transaction_id || null, r.item_id || null);
+        return `($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5},$${b + 6},$${b + 7},$${b + 8},$${b + 9},$${b + 10})`;
       });
-      const res = await this.q(`INSERT INTO transactions(user_id,date,name,merchant,amount,balance,category,source,plaid_transaction_id)
+      const res = await this.q(`INSERT INTO transactions(user_id,date,name,merchant,amount,balance,category,source,plaid_transaction_id,item_id)
                     VALUES ${tuples.join(',')} ${conflict}`, vals);
       n += res.rowCount || 0;
     }

@@ -8,11 +8,11 @@ const csv = readFileSync(new URL('./demo_data.csv', import.meta.url), 'utf8');
 let app: Express;
 const H = { 'x-user-email': 'test@osborn.dev' };
 
-async function call(method: string, path: string, body?: unknown, type = 'application/json') {
+async function call(method: string, path: string, body?: unknown, type = 'application/json', hdrs: Record<string, string> = H) {
   const srv = app.listen(0);
   const port = (srv.address() as { port: number }).port;
   const res = await fetch(`http://127.0.0.1:${port}${path}`, {
-    method, headers: { ...H, 'Content-Type': type },
+    method, headers: { ...hdrs, 'Content-Type': type },
     body: body === undefined ? undefined : (typeof body === 'string' ? body : JSON.stringify(body))
   });
   const text = await res.text();
@@ -164,6 +164,20 @@ describe('Security fixes', () => {
     const r = await call('POST', '/api/import/csv', big, 'text/csv');
     expect(r.status).toBe(413);
   });
+  it('FIX: unlinking a bank removes that bank\'s transactions', async () => {
+    const U = { 'x-user-email': 'unlink-fix@osborn.dev' }; // isolated user
+    await call('POST', '/api/billing/checkout', { plan: 'personal' }, 'application/json', U);
+    const ex = await call('POST', '/api/plaid/exchange', { public_token: 'public-unlink-fix' }, 'application/json', U);
+    expect(ex.json.imported).toBeGreaterThan(0);
+    const t1 = await call('GET', '/api/transactions?limit=1', undefined, 'application/json', U);
+    expect(t1.json.total).toBe(ex.json.imported); // bank's txns present
+    const me = await call('GET', '/api/me', undefined, 'application/json', U);
+    const itemId = me.json.items[0].id;
+    const d = await call('DELETE', `/api/plaid/items/${itemId}`, undefined, 'application/json', U);
+    expect(d.json.removed).toBe(true);
+    const t2 = await call('GET', '/api/transactions?limit=1', undefined, 'application/json', U);
+    expect(t2.json.total).toBe(0); // FIX: gone after unlink, not lingering
+  });
 });
 
 /* ============ Penetration-review remediation (H1/H2/M5) ============ */
@@ -191,5 +205,44 @@ describe('Pen-test remediation', () => {
   it('H1/H2: dev config is accepted; prod requires entra + issuer (logic check)', () => {
     // In the test runtime AUTH_MODE defaults to dev (NODE_ENV=test) → no fatal problems.
     expect(assertSecureConfig()).toEqual([]);
+  });
+});
+
+describe('Reports engine', () => {
+  const U = { 'x-user-email': 'reports@osborn.dev' };
+  it('monthly report returns KPIs, categories, trend, insights', async () => {
+    await call('POST', '/api/import/csv', csv, 'text/csv', U);
+    const r = await call('GET', '/api/reports/monthly?offset=0', undefined, 'application/json', U);
+    expect(r.status).toBe(200);
+    expect(r.json.period.grain).toBe('week');
+    expect(r.json.kpis.spend).toHaveProperty('delta');
+    expect(Array.isArray(r.json.categories)).toBe(true);
+    expect(Array.isArray(r.json.trend)).toBe(true);
+    expect(r.json.insights.tips.length).toBeGreaterThan(0);
+  });
+  it('weekly uses daily grain; year_in_review uses monthly grain', async () => {
+    const wk = await call('GET', '/api/reports/weekly', undefined, 'application/json', U);
+    expect(wk.json.period.grain).toBe('day');
+    const yr = await call('GET', '/api/reports/year_in_review', undefined, 'application/json', U);
+    expect(yr.json.period.grain).toBe('month');
+  });
+  it('rejects an unknown cadence', async () => {
+    const r = await call('GET', '/api/reports/decade', undefined, 'application/json', U);
+    expect(r.status).toBe(400);
+  });
+  it('day-range report: 30 days on the spot', async () => {
+    const r = await call('GET', '/api/reports?days=30&offset=0', undefined, 'application/json', U);
+    expect(r.status).toBe(200);
+    expect(r.json.days).toBe(30);
+    expect(r.json.period.days).toBe(30);
+    expect(r.json.kpis.spend).toHaveProperty('delta');
+    expect(Array.isArray(r.json.categories)).toBe(true);
+  });
+  it('day-range report: defaults to 30 days, supports custom + offset', async () => {
+    const def = await call('GET', '/api/reports', undefined, 'application/json', U);
+    expect(def.json.days).toBe(30);
+    const custom = await call('GET', '/api/reports?days=45&offset=1', undefined, 'application/json', U);
+    expect(custom.json.days).toBe(45);
+    expect(custom.json.period.days).toBe(45);
   });
 });

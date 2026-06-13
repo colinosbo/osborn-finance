@@ -23,3 +23,55 @@ export const COLORS: Record<string, string> = {
  'Bars & Nightlife':'#e8b500','Personal Care':'#d9480f','Fees':'#868e96','Taxes':'#228be6','Other':'#adb5bd','Income & Refunds':'#188d49'
 };
 export const color = (c: string) => COLORS[c] || '#adb5bd';
+// Display label for a plan key (internal key "family" shows as "Personal+").
+export const planLabel = (p?: string) => ({ free: 'Free', personal: 'Personal', family: 'Personal+', enterprise: 'Enterprise' } as Record<string, string>)[p || ''] || p || '—';
+
+// ---- profile helpers ----
+import type { Profile } from './types';
+import { mockProfile } from './mock';
+
+export function initials(name: string): string {
+  const s = (name || '').replace(/@.*$/, '').trim();
+  const parts = s.split(/[.\s_-]+/).filter(Boolean);
+  const a = parts[0]?.[0] || s[0] || '?';
+  const b = parts[1]?.[0] || '';
+  return (a + b).toUpperCase();
+}
+
+// Phase 1: hydrate from the existing /api/me, fill the rest with mock so the
+// page renders today. Phase 2 swaps this for GET /api/me/profile.
+export async function getProfile(): Promise<Profile> {
+  try {
+    const me = await api<{ id: string; email: string; plan: string; display_name?: string | null }>('/api/me');
+    return mockProfile({ id: me.id, email: me.email, plan: me.plan, displayName: me.display_name || undefined });
+  } catch {
+    return mockProfile();
+  }
+}
+
+// Relative "time ago" for sessions/activity.
+export function ago(iso: string): string {
+  const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
+  if (s < 60) return 'just now';
+  const m = s / 60; if (m < 60) return `${Math.floor(m)}m ago`;
+  const h = m / 60; if (h < 24) return `${Math.floor(h)}h ago`;
+  const d = h / 24; if (d < 30) return `${Math.floor(d)}d ago`;
+  const mo = d / 30; if (mo < 12) return `${Math.floor(mo)}mo ago`;
+  return `${Math.floor(mo / 12)}y ago`;
+}
+
+// Date formatter honoring the saved date-format preference.
+export function fmtDate(iso: string | undefined, format = 'MM/DD/YYYY'): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(+d)) return '—';
+  const Y = d.getFullYear(), M = d.getMonth() + 1, D = d.getDate();
+  const p = (n: number) => String(n).padStart(2, '0');
+  const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  switch (format) {
+    case 'DD/MM/YYYY': return `${p(D)}/${p(M)}/${Y}`;
+    case 'YYYY-MM-DD': return `${Y}-${p(M)}-${p(D)}`;
+    case 'D MMM YYYY': return `${D} ${MON[d.getMonth()]} ${Y}`;
+    default: return `${p(M)}/${p(D)}/${Y}`;
+  }
+}

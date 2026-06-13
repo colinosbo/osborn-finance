@@ -109,7 +109,7 @@ export async function runItemSync(store: Store, userId: string, itemDbId: string
     const merch = merchant(t.name);
     let category = classify(t.name, amount);
     if (amount < 0 && overrides[merch]) category = overrides[merch];
-    return { user_id: userId, date: t.date, name: cleanDesc(t.name), merchant: merch, amount, balance: null, category, source: 'plaid', plaid_transaction_id: t.transaction_id };
+    return { user_id: userId, date: t.date, name: cleanDesc(t.name), merchant: merch, amount, balance: null, category, source: 'plaid', plaid_transaction_id: t.transaction_id, item_id: itemDbId };
   });
   await store.insertTx(rows);
   await store.setCursor(itemDbId, next_cursor);

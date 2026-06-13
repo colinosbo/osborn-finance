@@ -1,0 +1,78 @@
+OSBORN FINANCE — FULL APPLICATION SCAN & FIX LOG
+Date: 2026-06-12
+Scope: server (Express/TS) + web (React/Vite). Build, typecheck, tests, and code review.
+
+=====================================================================
+RESULT SUMMARY
+=====================================================================
+- Server: `tsc --noEmit` clean. Test suite 23/23 passing (vitest).
+- Web:    `tsc --noEmit` clean. Production `vite build` succeeds (46 modules).
+- 3 real bugs found and fixed (2 of which would bite in normal use, 1 broke the
+  test suite). Several non-blocking observations noted at the bottom.
+
+=====================================================================
+FIXES APPLIED
+=====================================================================
+
+FIX 1 — Unlinking a bank left its transactions behind  [HIGH / data correctness]
+  Symptom: after "Unlink" on the Accounts page, the disconnected bank's
+    transactions still appeared in the ledger, summary, and advisor.
+  Cause: transactions had no link to their Plaid item. Deleting the item
+    cascade-deleted the accounts but left every plaid-sourced transaction row,
+    so the data lingered.
+  Fix:
+    - New migration server/src/migrations/003_tx_item_link.sql adds
+      transactions.item_id (FK -> plaid_items ON DELETE CASCADE) + index.
+    - server/src/plaid.ts runItemSync now stamps item_id on each synced row.
+    - server/src/store.ts: Tx type gains item_id; PgStore batch insert writes
+      it (now 10 columns); MemStore.removeItem now also drops that item's
+      transactions and accounts. CSV imports set item_id = null (not bank-tied).
+    - On unlink, deleting the plaid_item now cascades the transactions away.
+  Test: new "FIX: unlinking a bank removes that bank's transactions" in
+    server/test/api.test.ts (links a bank, asserts txns present, unlinks,
+    asserts total drops to 0). Passing.
+  Note: only NEW plaid transactions carry item_id; any rows synced before this
+    migration have item_id = NULL and won't auto-cascade. Fine pre-launch
+    (sandbox data); for existing prod data a one-time backfill would be needed.
+
+FIX 2 — Profile inputs lost focus after every keystroke  [MEDIUM / UX]
+  Symptom: on the Profile page, typing in any edit field (name, phone, recovery
+    email, etc.) dropped focus after a single character.
+  Cause: the <Section> wrapper component was defined INSIDE the Profile
+    component body, so every render created a new component identity and React
+    remounted the whole panel subtree (including the focused <input>).
+  Fix: moved Section to module scope in web/src/pages/Profile.tsx so its identity
+    is stable across renders. Inputs now keep focus while typing.
+
+FIX 3 — Test suite broke when a real .env was present  [HIGH / regression]
+  Symptom: after adding `.env` loading, `npm test` failed 7 tests with
+    EAI_AGAIN getaddrinfo sandbox.plaid.com — the suite was leaving mock mode
+    and trying to reach real Plaid.
+  Cause: `import 'dotenv/config'` in index.ts loaded server/.env unconditionally,
+    including the live PLAID_CLIENT_ID, so cfg.plaid.mock became false during
+    tests.
+  Fix: replaced with server/src/loadenv.ts, which loads .env only when
+    NODE_ENV !== 'test' (vitest sets NODE_ENV=test). index.ts imports it first.
+    Tests are hermetic again (mock mode); dev/prod still load .env normally.
+
+=====================================================================
+VERIFICATION DETAIL
+=====================================================================
+  server:  npx tsc --noEmit            -> clean
+           npx vitest run              -> 23 passed (incl. new unlink test)
+  web:     npx tsc --noEmit            -> clean
+           npx vite build              -> built OK (dist ~214 kB / 67 kB gzip)
+
+=====================================================================
+OBSERVATIONS (not fixed — no action needed yet / future work)
+=====================================================================
+- Preferences (currency / date format / timezone / default range) are saved and
+  shown, but not yet threaded through every page's number/date formatting. That
+  is the planned Phase-2 wiring, not a bug.
+- Plaid Link works in sandbox. For PRODUCTION OAuth-based institutions you'll
+  also need an OAuth redirect URI registered in the Plaid dashboard and
+  receivedRedirectUri handling on return. Not required for sandbox testing.
+- server/.env now exists locally with sandbox Plaid keys. It is git-ignored
+  (verified) so it won't be committed. Treat production keys as real secrets.
+- New runtime deps added this session: server -> dotenv (+ zod earlier);
+  web -> react-plaid-link. Run `npm install` in each folder.

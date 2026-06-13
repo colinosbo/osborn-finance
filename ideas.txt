@@ -1,0 +1,9 @@
+AI-generated monthly financial health reports
+Spending trend analysis
+Personalized savings recommendations
+Subscription detection
+Bill increase alerts
+Goal tracking ("save $5,000 for a house")
+Natural language questions ("Where did my money go this month?")
+charge notifications
+investment tracker

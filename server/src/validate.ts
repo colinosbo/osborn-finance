@@ -15,6 +15,13 @@ export const schemas = {
   plaidExchange: z.object({
     public_token: z.string().min(1).max(500)
   }),
+  reportQuery: z.object({
+    offset: z.coerce.number().int().min(0).max(120).optional()
+  }),
+  reportRange: z.object({
+    days: z.coerce.number().int().min(1).max(3650).optional(),
+    offset: z.coerce.number().int().min(0).max(120).optional()
+  }),
   transactionsQuery: z.object({
     days: z.coerce.number().int().min(0).max(100000).optional(),
     cat: z.string().max(100).optional(),
