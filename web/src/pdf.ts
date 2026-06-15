@@ -165,26 +165,6 @@ export async function generateReportPDF(rep: ReportPDFData, opts: PDFOpts = {}):
     y += ch + 16;
   }
 
-  // ---------- cash flow ----------
-  if (sec.trend && rep.trend.length) {
-    sectionHead('Cash flow');
-    const H = 108, padX = 16, padT = 16; const ch = H + 56; ensure(ch); panel(M, y, CW, ch);
-    const x0 = M + padX, baseY = y + padT + H, plotW = CW - padX * 2;
-    const max = Math.max(1, ...rep.trend.map(d => Math.max(d.in, d.out)));
-    const n = rep.trend.length, slot = plotW / n, bw = Math.min(14, slot * 0.32);
-    doc.setDrawColor(...HAIR); doc.setLineWidth(1); doc.line(x0, baseY, x0 + plotW, baseY);
-    rep.trend.forEach((d, i) => {
-      const cxx = x0 + slot * i + slot / 2; const inH = (d.in / max) * H, outH = (d.out / max) * H;
-      doc.setFillColor(...GREEN); doc.roundedRect(cxx - bw - 1, baseY - inH, bw, inH, 1.5, 1.5, 'F');
-      doc.setFillColor(...VIOLET); doc.roundedRect(cxx + 1, baseY - outH, bw, outH, 1.5, 1.5, 'F');
-      if (n <= 16 || i % Math.ceil(n / 14) === 0) { font('normal', 6.5, FAINT); T(d.label, cxx, baseY + 13, { align: 'center' }); }
-    });
-    const ly = y + ch - 13;
-    doc.setFillColor(...GREEN); doc.roundedRect(M + padX, ly - 8, 9, 9, 1.5, 1.5, 'F'); font('normal', 8.5, MUTED); T('Income', M + padX + 13, ly);
-    doc.setFillColor(...VIOLET); doc.roundedRect(M + padX + 78, ly - 8, 9, 9, 1.5, 1.5, 'F'); T('Spending', M + padX + 91, ly);
-    y += ch + 16;
-  }
-
   // ---------- insights (accent bar, no glyphs) ----------
   if (sec.insights && rep.insights.tips.length) {
     sectionHead('Insights');
@@ -213,27 +193,6 @@ export async function generateReportPDF(rep: ReportPDFData, opts: PDFOpts = {}):
       font('normal', 9.5, INK); T(money(m.total), RIGHT - 16, ry, { align: 'right' });
       ry += 19;
     }
-    y += ch + 16;
-  }
-
-  // ---------- notable (grouped biggest with counts) ----------
-  if (sec.notable && (rep.biggest.length || rep.subscriptions.count || rep.newMerchants.length)) {
-    sectionHead('Notable');
-    const big = rep.biggest.slice(0, 6);
-    const extras = (rep.subscriptions.count ? 1 : 0) + (rep.newMerchants.length ? 1 : 0);
-    const ch = 32 + big.length * 19 + extras * 17 + 8; ensure(ch); panel(M, y, CW, ch);
-    let ry = y + 24; const px = M + 16;
-    font('bold', 7, FAINT); T('TOP SPEND GROUPS', px, ry - 6); doc.setDrawColor(...HAIR); doc.line(px, ry, RIGHT - 16, ry); ry += 17;
-    for (const b of big) {
-      const cnt = b.count && b.count > 1 ? `  (${b.count}x)` : '';
-      font('normal', 9.5, INK); T(clip(`${b.name} - ${b.category}`, 46), px, ry);
-      if (cnt) { font('normal', 8.5, FAINT); const w = doc.getTextWidth(money(b.amount)); T(cnt, RIGHT - 16 - w - 6, ry, { align: 'right' }); }
-      font('normal', 9.5, RED); T(money(b.amount), RIGHT - 16, ry, { align: 'right' });
-      ry += 19;
-    }
-    ry += 2;
-    if (rep.subscriptions.count) { font('normal', 9, MUTED); T(`Subscriptions: ${rep.subscriptions.count} active  ·  ${money0(rep.subscriptions.monthly)}/mo`, px, ry); ry += 17; }
-    if (rep.newMerchants.length) { font('normal', 9, MUTED); const l = doc.splitTextToSize('New this period: ' + safe(rep.newMerchants.slice(0, 8).join(', ')), CW - 32); T(l, px, ry); }
     y += ch + 16;
   }
 

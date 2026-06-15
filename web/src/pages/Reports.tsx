@@ -3,8 +3,9 @@ import { api, fmt, fmt0, color } from '../api';
 import { generateReportPDF } from '../pdf';
 import type { Toast } from '../App';
 import EmptyState from '../EmptyState';
+import RangePicker, { DEFAULT_RANGE, rangeQS, type RangeOpt } from '../RangePicker';
 
-// SVG donut of expenses by category — shown in the report and captured into the PDF.
+// SVG donut of expenses by category, shown in the report and captured into the PDF.
 function Donut({ cats, total }: { cats: { name: string; total: number }[]; total: number }) {
   const top = cats.slice(0, 9);
   const rest = cats.slice(9).reduce((s, c) => s + c.total, 0);
@@ -31,7 +32,7 @@ function Donut({ cats, total }: { cats: { name: string; total: number }[]; total
 interface Kpi { value: number; prev: number; delta: number; pct: number | null }
 interface Cat { name: string; total: number; count: number; prev: number; delta: number; share: number }
 interface Report {
-  days: number; offset: number;
+  month?: string;
   period: { from: string; to: string; label: string; days: number; grain: string };
   kpis: { income: Kpi; spend: Kpi; net: Kpi; savingsRate: Kpi; count: number };
   categories: Cat[];
@@ -43,44 +44,19 @@ interface Report {
   insights: { tips: { icon: string; title: string; text: string; savePerMonth: number; pinned?: boolean }[]; totalSavePerMonth: number; savingsRate: number };
 }
 
-const PRESETS = [
-  { label: '7 days', days: 7 },
-  { label: '30 days', days: 30 },
-  { label: '90 days', days: 90 },
-  { label: '6 months', days: 182 },
-  { label: '1 year', days: 365 }
-];
-
 type Sections = { kpis: boolean; trend: boolean; categories: boolean; insights: boolean; merchants: boolean; notable: boolean };
-interface RP { days: number; topN: number; sections: Sections }
+interface RP { topN: number; sections: Sections }
 const RKEY = 'of_report_prefs';
-const DEFAULT_RP: RP = { days: 30, topN: 8, sections: { kpis: true, trend: true, categories: true, insights: true, merchants: true, notable: true } };
+const DEFAULT_RP: RP = { topN: 8, sections: { kpis: true, trend: true, categories: true, insights: true, merchants: true, notable: true } };
 const loadRP = (): RP => { try { const s = JSON.parse(localStorage.getItem(RKEY) || '{}'); return { ...DEFAULT_RP, ...s, sections: { ...DEFAULT_RP.sections, ...(s.sections || {}) } }; } catch { return { ...DEFAULT_RP }; } };
 const saveRP = (rp: RP) => localStorage.setItem(RKEY, JSON.stringify(rp));
 
 function Delta({ k, goodUp, rate }: { k: Kpi; goodUp: boolean; rate?: boolean }) {
-  if (!k.prev && !k.delta) return <span className="delta flat">— no prior data</span>;
+  if (!k.prev && !k.delta) return <span className="delta flat">no prior data</span>;
   const up = k.delta >= 0, good = up === goodUp;
   const txt = rate ? `${k.delta > 0 ? '+' : ''}${k.delta} pts`
     : `${k.delta > 0 ? '+' : ''}${fmt0(k.delta)}${k.pct != null ? ` · ${k.pct > 0 ? '+' : ''}${k.pct}%` : ''}`;
   return <span className={'delta ' + (good ? 'good' : 'bad')}>{up ? '▲' : '▼'} {txt} <span className="delta-vs">vs prior</span></span>;
-}
-
-function Trend({ data }: { data: Report['trend'] }) {
-  const max = Math.max(1, ...data.map(d => Math.max(d.in, d.out)));
-  const n = Math.max(1, data.length), bw = Math.max(5, (520 / n - 8) / 2);
-  return (
-    <svg className="trendchart" viewBox="0 0 520 150" preserveAspectRatio="none" role="img" aria-label="Income vs spending trend">
-      {data.map((d, i) => {
-        const x = i * (520 / n) + 8, inH = (d.in / max) * 120, outH = (d.out / max) * 120;
-        return (<g key={i}>
-          <rect className="tb-in" x={x} y={130 - inH} width={bw} height={inH} />
-          <rect className="tb-out" x={x + bw + 2} y={130 - outH} width={bw} height={outH} />
-          <text className="tb-lab" x={x + bw} y={146} textAnchor="middle">{d.label}</text>
-        </g>);
-      })}
-    </svg>
-  );
 }
 
 function Check({ label, on, onToggle }: { label: string; on: boolean; onToggle: () => void }) {
@@ -91,31 +67,31 @@ function Check({ label, on, onToggle }: { label: string; on: boolean; onToggle: 
 
 export default function Reports({ toast }: { toast: Toast }) {
   const [rp, setRp] = useState<RP>(loadRP());
-  const [offset, setOffset] = useState(0);
+  const [range, setRange] = useState<RangeOpt>(DEFAULT_RANGE);
   const [rep, setRep] = useState<Report | null>(null);
   const [loading, setLoading] = useState(true);
-  const [customOpen, setCustomOpen] = useState(!PRESETS.some(p => p.days === loadRP().days));
-  const [customDays, setCustomDays] = useState(String(loadRP().days));
+  const [noData, setNoData] = useState(false);
   const [showCustomize, setShowCustomize] = useState(false);
 
   const update = (patch: Partial<RP>) => { const next = { ...rp, ...patch }; setRp(next); saveRP(next); };
   const setSection = (k: keyof Sections) => update({ sections: { ...rp.sections, [k]: !rp.sections[k] } });
 
   const fetchReport = () => {
+    // The picker resolves to a real month before we fetch; skip the transient
+    // "all time" default so we never request a degenerate range.
+    if (!range.from) return;
     setLoading(true);
-    api<Report>(`/api/reports?days=${rp.days}&offset=${offset}`).then(r => { setRep(r); setLoading(false); }).catch(() => setLoading(false));
+    api<Report>(`/api/reports?${rangeQS(range)}`).then(r => { setRep(r); setLoading(false); }).catch(() => setLoading(false));
   };
-  useEffect(fetchReport, [rp.days, offset]); // auto-generate on range/period change
+  useEffect(fetchReport, [range]); // auto-generate when the month changes
+  // If there are no months with data at all, drop the skeleton and show the
+  // connect/empty state instead of waiting forever for the picker to resolve.
+  useEffect(() => {
+    api<{ months: string[] }>('/api/tx-months')
+      .then(r => { if (!r.months?.length) { setNoData(true); setLoading(false); } })
+      .catch(() => setLoading(false));
+  }, []);
 
-  const pickPreset = (days: number) => { setCustomOpen(false); setOffset(0); update({ days }); };
-  const generateCustom = () => {
-    const d = Math.max(1, Math.min(3650, parseInt(customDays, 10) || 30));
-    setCustomDays(String(d)); setOffset(0);
-    if (d === rp.days) fetchReport(); else update({ days: d });
-    toast(`Report generated · last ${d} days`);
-  };
-
-  const isYear = rp.days >= 365;
   const s = rp.sections;
 
   const downloadCSV = () => {
@@ -128,35 +104,21 @@ export default function Reports({ toast }: { toast: Toast }) {
     rep.merchants.forEach(m => lines.push(`Merchant,"${m.name}",${m.total},${m.count},,`));
     const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob); a.download = `osborn-report-${rp.days}d.csv`; a.click();
+    a.href = URL.createObjectURL(blob); a.download = `osborn-report-${rep.month || rep.period.from}.csv`; a.click();
     toast('CSV downloaded');
   };
 
   return (
     <>
       <div className="sec-head"><span className="sec-num">06</span><span className="sec-title">Reports</span></div>
-      <div className="sec-sub">Pick a range, generate, and tailor what you see</div>
+      <div className="sec-sub">Pick a month, generate, and tailor what you see</div>
 
       {/* ---- control panel ---- */}
       <div className="panel rep-controls" style={{ marginBottom: 22 }}>
         <div className="rc-row">
-          <span className="rc-lbl">Time range</span>
-          <div className="seg">
-            {PRESETS.map(p => (
-              <button key={p.days} className={'seg-btn' + (!customOpen && rp.days === p.days ? ' active' : '')} onClick={() => pickPreset(p.days)}>{p.label}</button>
-            ))}
-            <button className={'seg-btn' + (customOpen ? ' active' : '')} onClick={() => setCustomOpen(true)}>Custom</button>
-          </div>
+          <span className="rc-lbl">Month</span>
+          <RangePicker value={range.value} onChange={setRange} />
         </div>
-        {customOpen && (
-          <div className="rc-row rc-custom">
-            <span className="rc-lbl">Last</span>
-            <input type="number" min={1} max={3650} value={customDays} onChange={e => setCustomDays(e.target.value)} style={{ width: 90 }}
-              onKeyDown={e => { if (e.key === 'Enter') generateCustom(); }} />
-            <span className="rc-lbl">days</span>
-            <button className="btn primary" onClick={generateCustom}>Generate report</button>
-          </div>
-        )}
         <div className="rc-row rc-foot">
           <button className="rc-toggle" onClick={() => setShowCustomize(v => !v)}>⚙ Customize report {showCustomize ? '▴' : '▾'}</button>
         </div>
@@ -166,11 +128,9 @@ export default function Reports({ toast }: { toast: Toast }) {
               <div className="rc-panel-title">Sections</div>
               <div className="rc-checks">
                 <Check label="Summary KPIs" on={s.kpis} onToggle={() => setSection('kpis')} />
-                <Check label="Cash-flow trend" on={s.trend} onToggle={() => setSection('trend')} />
                 <Check label="Categories" on={s.categories} onToggle={() => setSection('categories')} />
                 <Check label="Insights" on={s.insights} onToggle={() => setSection('insights')} />
                 <Check label="Top merchants" on={s.merchants} onToggle={() => setSection('merchants')} />
-                <Check label="Notable" on={s.notable} onToggle={() => setSection('notable')} />
               </div>
             </div>
             <div className="rc-panel-grp">
@@ -187,9 +147,7 @@ export default function Reports({ toast }: { toast: Toast }) {
 
       {/* ---- period + actions ---- */}
       <div className="rep-stepper">
-        <button className="iconbtn" onClick={() => setOffset(o => o + 1)}>◀ Previous</button>
-        <div className="rep-period">{rep ? <>{rep.period.label}{offset > 0 ? ` (${offset} back)` : ''} <span className="rep-range">{rep.period.from} → {rep.period.to}</span></> : 'Generating…'}</div>
-        <button className="iconbtn" onClick={() => setOffset(o => Math.max(0, o - 1))} disabled={offset === 0}>Next ▶</button>
+        <div className="rep-period">{rep ? <>{rep.period.label} <span className="rep-range">{rep.period.from} → {rep.period.to}</span></> : 'Generating…'}</div>
       </div>
       <div className="rep-actions" style={{ marginBottom: 18 }}>
         <button className="btn" onClick={fetchReport}>↻ Regenerate</button>
@@ -200,10 +158,10 @@ export default function Reports({ toast }: { toast: Toast }) {
       </div>
 
       {/* ---- body ---- */}
-      {loading && !rep ? (
+      {loading && !rep && !noData ? (
         <div className="panel"><div className="skeleton" style={{ width: '40%', marginBottom: 14 }} /><div className="skeleton" style={{ height: 90 }} /></div>
       ) : !rep || rep.kpis.count === 0 ? (
-        <EmptyState icon="chart" eyebrow="Reports" title="No activity in this range" sub="Try a longer range or step to a previous period. If you haven't linked an account yet, connect one to start generating reports." cta={{ to: '/accounts', label: 'Connect a bank' }} />
+        <EmptyState icon="chart" eyebrow="Reports" title="No activity this month" sub="Pick a different month above. If you haven't linked an account yet, connect one to start generating reports." cta={{ to: '/accounts', label: 'Connect a bank' }} />
       ) : (
         <div className={'rep-body' + (loading ? ' busy' : '')}>
           <div className="rep-doc-head">
@@ -211,28 +169,12 @@ export default function Reports({ toast }: { toast: Toast }) {
             <div className="rdh-title">Spending Report</div>
             <div className="rdh-sub">{rep.period.label} · {rep.period.from} → {rep.period.to} · {rep.period.days} days</div>
           </div>
-          {isYear && s.kpis && (
-            <div className="panel rep-hero">
-              <div className="hero-kicker">{rep.period.label} — in review</div>
-              <div className="hero-stat">You spent {fmt0(rep.kpis.spend.value)}</div>
-              <div className="hero-sub">across {rep.kpis.count.toLocaleString()} transactions · saved {fmt0(rep.kpis.net.value)} ({rep.kpis.savingsRate.value}% rate)</div>
-            </div>
-          )}
-
           {s.kpis && (
             <div className="cards" style={{ marginBottom: 28 }}>
               <div className="card"><div className="label">Income</div><div className="value green">{fmt0(rep.kpis.income.value)}</div><Delta k={rep.kpis.income} goodUp /></div>
               <div className="card"><div className="label">Spending</div><div className="value">{fmt0(rep.kpis.spend.value)}</div><Delta k={rep.kpis.spend} goodUp={false} /></div>
               <div className="card"><div className="label">Net</div><div className={'value ' + (rep.kpis.net.value < 0 ? 'red' : 'green')}>{fmt0(rep.kpis.net.value)}</div><Delta k={rep.kpis.net} goodUp /></div>
               <div className="card"><div className="label">Savings rate</div><div className="value">{rep.kpis.savingsRate.value}%</div><Delta k={rep.kpis.savingsRate} goodUp rate /></div>
-            </div>
-          )}
-
-          {s.trend && (
-            <div className="panel" style={{ marginBottom: 28 }}>
-              <h3>Cash flow</h3><div className="psub">Income vs spending across the range</div>
-              <Trend data={rep.trend} />
-              <div className="trend-legend"><span className="lg in">Income</span><span className="lg out">Spending</span></div>
             </div>
           )}
 
@@ -262,25 +204,11 @@ export default function Reports({ toast }: { toast: Toast }) {
             </div>
           )}
 
-          {(s.merchants || s.notable) && (
-            <div className="row2">
-              {s.merchants && (
-                <div className="panel">
-                  <h3>Top merchants</h3><div className="psub">Where the money went</div>
-                  {rep.merchants.slice(0, rp.topN).map(m => (<div className="lrow" key={m.name}><span className="name">{m.name}</span><span style={{ fontSize: 11, color: 'var(--faint)' }}>{m.count}×</span><span className="val">{fmt(m.total)}</span></div>))}
-                  {!rep.merchants.length && <div className="empty">No merchants this range.</div>}
-                </div>
-              )}
-              {s.notable && (
-                <div className="panel">
-                  <h3>Notable</h3><div className="psub">Biggest purchases, new merchants &amp; subscriptions</div>
-                  {rep.biggest.map((b, i) => (<div className="lrow" key={i}><span className="name">{b.name}<span style={{ color: 'var(--faint)', fontWeight: 400 }}> · {b.category}</span></span><span className="val red">{fmt(b.amount)}</span></div>))}
-                  <div className="notable-tags">
-                    {rep.subscriptions.count > 0 && <span className="ntag">↻ {rep.subscriptions.count} subscriptions · {fmt0(rep.subscriptions.monthly)}/mo</span>}
-                    {rep.newMerchants.slice(0, 6).map(m => <span className="ntag new" key={m}>＋ {m}</span>)}
-                  </div>
-                </div>
-              )}
+          {s.merchants && (
+            <div className="panel">
+              <h3>Top merchants</h3><div className="psub">Where the money went</div>
+              {rep.merchants.slice(0, rp.topN).map(m => (<div className="lrow" key={m.name}><span className="name">{m.name}</span><span style={{ fontSize: 11, color: 'var(--faint)' }}>{m.count}×</span><span className="val">{fmt(m.total)}</span></div>))}
+              {!rep.merchants.length && <div className="empty">No merchants this range.</div>}
             </div>
           )}
         </div>

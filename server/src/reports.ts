@@ -137,3 +137,11 @@ export function buildRangeReport(tx: Tx[], days: number, offset: number) {
   const anchor = tx.length ? tx[tx.length - 1].date : isoOf(new Date());
   return { days, offset, ...assemble(tx, rangeWindow(anchor, days, offset)) };
 }
+
+// Calendar-month report ('YYYY-MM'): the whole month, compared to the prior period
+// (the equal-length window immediately before it), with a weekly trend grain.
+export function buildMonthReport(tx: Tx[], ym: string) {
+  const from = ym + '-01';
+  const to = monthLast(from);
+  return { month: ym, ...assemble(tx, { from, to, label: ym, grain: 'week' }) };
+}

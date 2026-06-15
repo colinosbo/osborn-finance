@@ -3,22 +3,38 @@ import { api, fmt, fmt0, color, fmtDate } from '../api';
 import { loadPrefs } from '../prefs';
 import EmptyState from '../EmptyState';
 
+interface PriceChange {
+  previousAmount: number; currentAmount: number; deltaAmount: number;
+  pct: number; direction: 'up' | 'down'; since: string; annualImpact: number;
+}
 interface Sub {
   merchant: string; category: string; amount: number; cadence: string; periodDays: number;
   monthlyCost: number; annualCost: number; lastCharged: string; nextCharge: string;
-  count: number; active: boolean; confidence: number;
+  count: number; active: boolean; confidence: number; priceChange?: PriceChange;
 }
-interface Resp { subscriptions: Sub[]; totals: { activeCount: number; monthlyTotal: number; annualTotal: number } }
+interface Resp {
+  subscriptions: Sub[];
+  totals: { activeCount: number; monthlyTotal: number; annualTotal: number };
+  alerts: { increaseCount: number; monthlyImpact: number; annualImpact: number };
+}
 
 const initials = (s: string) => (s || '?').replace(/[^a-zA-Z0-9]/g, ' ').trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?';
 
 function Row({ s, df }: { s: Sub; df: string }) {
+  const pc = s.priceChange;
   return (
     <div className={'sub-row' + (s.active ? '' : ' lapsed')}>
       <span className="sub-ico" style={{ background: color(s.category) }}>{initials(s.merchant)}</span>
       <div className="sub-meta">
-        <b>{s.merchant}</b>
-        <span>{s.cadence} · billed {s.count}× · last {fmtDate(s.lastCharged, df)}</span>
+        <b>
+          {s.merchant}
+          {pc && pc.direction === 'up' && <span className="sub-hike">↑ {pc.pct}%</span>}
+          {pc && pc.direction === 'down' && <span className="sub-drop">↓ {Math.abs(pc.pct)}%</span>}
+        </b>
+        <span>
+          {s.cadence} · billed {s.count}× · last {fmtDate(s.lastCharged, df)}
+          {pc && <span className="sub-pchg">{' · '}{fmt(pc.previousAmount)} → {fmt(pc.currentAmount)} since {fmtDate(pc.since, df)}</span>}
+        </span>
       </div>
       <div className="sub-cadence">
         {s.active ? <><span className="sub-next-lbl">Next charge</span><span className="sub-next">{fmtDate(s.nextCharge, df)}</span></> : <span className="sub-lapsed-tag">Likely canceled</span>}
@@ -41,6 +57,8 @@ export default function Subscriptions() {
   const active = data?.subscriptions.filter(s => s.active) || [];
   const lapsed = data?.subscriptions.filter(s => !s.active) || [];
   const soonest = active.map(s => s.nextCharge).sort()[0];
+  const hikes = active.filter(s => s.priceChange && s.priceChange.direction === 'up')
+    .sort((a, b) => (b.priceChange!.annualImpact) - (a.priceChange!.annualImpact));
 
   return (
     <>
@@ -64,6 +82,28 @@ export default function Subscriptions() {
             <div className="card"><div className="label">Annual cost</div><div className="value">{fmt0(data.totals.annualTotal)}</div><div className="detail">projected per year</div></div>
             <div className="card"><div className="label">Next charge</div><div className="value" style={{ fontSize: 22 }}>{soonest ? fmtDate(soonest, df) : '—'}</div><div className="detail">soonest renewal</div></div>
           </div>
+
+          {data.alerts.increaseCount > 0 && (
+            <div className="alertbar" style={{ marginBottom: 24 }}>
+              <div className="alertbar-head">
+                <span className="alertbar-ico">↑</span>
+                <div>
+                  <b>{data.alerts.increaseCount} {data.alerts.increaseCount === 1 ? 'subscription has' : 'subscriptions have'} gone up in price</b>
+                  <span>That's about {fmt0(data.alerts.monthlyImpact)}/mo more — roughly {fmt0(data.alerts.annualImpact)} extra a year if nothing changes.</span>
+                </div>
+              </div>
+              <div className="alertbar-list">
+                {hikes.map(s => (
+                  <div className="alertbar-row" key={s.merchant}>
+                    <span className="alertbar-name">{s.merchant}</span>
+                    <span className="alertbar-chg">{fmt(s.priceChange!.previousAmount)} → {fmt(s.priceChange!.currentAmount)}</span>
+                    <span className="alertbar-pct">+{s.priceChange!.pct}%</span>
+                    <span className="alertbar-impact">+{fmt0(s.priceChange!.annualImpact)}/yr</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="panel" style={{ marginBottom: lapsed.length ? 24 : 0 }}>
             <h3>Active subscriptions</h3><div className="psub">Sorted by monthly cost</div>

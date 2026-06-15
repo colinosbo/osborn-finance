@@ -8,8 +8,12 @@ export async function api<T = unknown>(path: string, opts: { method?: string; bo
     headers: { 'x-user-email': getEmail(), 'Content-Type': opts.raw ? 'text/csv' : 'application/json' },
     body: opts.raw ?? (opts.body !== undefined ? JSON.stringify(opts.body) : undefined)
   });
-  const j = await res.json();
-  if (!res.ok) throw Object.assign(new Error(j.error || res.statusText), { status: res.status, data: j });
+  // Resilient parse: an empty body (204/304) or a non-JSON error page must not
+  // surface as "Unexpected end of JSON input", so fall back to a clear message.
+  const text = await res.text();
+  let j: { error?: string } = {};
+  if (text) { try { j = JSON.parse(text); } catch { j = { error: text.slice(0, 200) }; } }
+  if (!res.ok) throw Object.assign(new Error(j.error || res.statusText || `Request failed (${res.status})`), { status: res.status, data: j });
   return j as T;
 }
 export const fmt = (n: number) => (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });

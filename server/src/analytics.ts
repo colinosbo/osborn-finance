@@ -1,9 +1,12 @@
 // Summary + Advisor engines (server-side ports of the app logic).
 import type { Tx } from './store.js';
 
-export function summarize(tx: Tx[], days: number, latest: string) {
-  const cutoff = days ? shift(latest, -days) : '';
-  const cur = cutoff ? tx.filter(t => t.date > cutoff) : tx;
+// Window is [from (exclusive), to (inclusive)]. Empty `from` = no lower bound (all
+// time); empty `to` = up to the latest data. The route computes from/to for both a
+// rolling day-window and an explicit calendar month.
+export function summarize(tx: Tx[], from: string, to: string) {
+  const anchor = to || (tx.length ? tx[tx.length - 1].date : new Date().toISOString().slice(0, 10));
+  const cur = tx.filter(t => (!from || t.date > from) && (!to || t.date <= to));
   const income = cur.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
   const spend = Math.abs(cur.filter(t => t.amount < 0).reduce((s, t) => s + t.amount, 0));
   const cats: Record<string, { total: number; count: number }> = {};
@@ -23,9 +26,10 @@ export function summarize(tx: Tx[], days: number, latest: string) {
     if (t.amount > 0) months[k].in += t.amount; else months[k].out += Math.abs(t.amount);
   }
   return {
+    hasAny: tx.length > 0,
     range: { from: cur[0]?.date || null, to: cur[cur.length - 1]?.date || null, count: cur.length },
     income: r2(income), spend: r2(spend), net: r2(income - spend),
-    avgMonthly: avgMonthly(tx, latest),
+    avgMonthly: avgMonthly(tx, anchor),
     categories: Object.entries(cats).map(([name, v]) => ({ name, total: r2(v.total), count: v.count })).sort((a, b) => b.total - a.total),
     merchants: Object.entries(merch).map(([name, v]) => ({ name, total: r2(v.total), count: v.count })).sort((a, b) => b.total - a.total).slice(0, 12),
     monthly: Object.entries(months).sort().map(([month, v]) => ({ month, in: r2(v.in), out: r2(v.out) }))

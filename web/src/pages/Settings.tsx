@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, planLabel } from '../api';
-import { loadPrefs, savePrefs, applyMotionPref, CURRENCIES, DATE_FORMATS, TIMEZONES, RANGES, type Prefs } from '../prefs';
+import { loadPrefs, savePrefs, applyMotionPref, CURRENCIES, DATE_FORMATS, TIMEZONES, type Prefs } from '../prefs';
 import type { Toast } from '../App';
 
 function Switch({ on, onToggle }: { on: boolean; onToggle: () => void }) {
@@ -13,7 +13,13 @@ function Switch({ on, onToggle }: { on: boolean; onToggle: () => void }) {
   );
 }
 
-export default function Settings({ toast, dark, setDark }: { toast: Toast; dark: boolean; setDark: (v: boolean) => void }) {
+const THEMES: { id: string; label: string; sw: string; ring: string }[] = [
+  { id: 'gray', label: 'Gray', sw: '#17181a', ring: '#292a2d' },
+  { id: 'light', label: 'White', sw: '#ffffff', ring: '#dcd5ee' },
+  { id: 'purple', label: 'Purple', sw: '#1a1427', ring: '#3a2f5a' }
+];
+
+export default function Settings({ toast, theme, setTheme }: { toast: Toast; theme: string; setTheme: (v: string) => void }) {
   const [me, setMe] = useState<{ email: string; plan: string } | null>(null);
   const [prefs, setPrefs] = useState<Prefs>(loadPrefs());
   useEffect(() => { api<{ email: string; plan: string }>('/api/me').then(setMe).catch(() => {}); }, []);
@@ -40,8 +46,16 @@ export default function Settings({ toast, dark, setDark }: { toast: Toast; dark:
       <div className="panel" style={{ marginBottom: 24 }}>
         <h3>Appearance</h3><div className="psub">How Osborn Finance looks on this device</div>
         <div className="switchrow">
-          <div className="lab"><b>Dark mode</b><span>Easier on the eyes — on by default</span></div>
-          <Switch on={dark} onToggle={() => { setDark(!dark); toast(dark ? 'Light mode on' : 'Dark mode on'); }} />
+          <div className="lab"><b>Theme</b><span>Gray by default, or switch to White or Purple</span></div>
+          <div className="themepick">
+            {THEMES.map(t => (
+              <button key={t.id} type="button" className={'themeopt' + (theme === t.id ? ' sel' : '')}
+                onClick={() => { setTheme(t.id); toast(`${t.label} theme on`); }} aria-pressed={theme === t.id}>
+                <span className="themeopt-sw" style={{ background: t.sw, borderColor: t.ring }} />
+                {t.label}
+              </button>
+            ))}
+          </div>
         </div>
         <div className="switchrow">
           <div className="lab"><b>Reduce motion</b><span>Minimize animations and transitions</span></div>
@@ -63,10 +77,6 @@ export default function Settings({ toast, dark, setDark }: { toast: Toast; dark:
           <label className="fld"><span>Time zone</span>
             <select value={prefs.timezone} onChange={e => setPrefs({ ...prefs, timezone: e.target.value })}>
               {TIMEZONES.map(t => <option key={t} value={t}>{t}</option>)}
-            </select></label>
-          <label className="fld"><span>Default time range</span>
-            <select value={prefs.defaultRangeDays} onChange={e => setPrefs({ ...prefs, defaultRangeDays: +e.target.value })}>
-              {RANGES.map(r => <option key={r.v} value={r.v}>{r.l}</option>)}
             </select></label>
           <div className="controls" style={{ marginTop: 14, marginBottom: 0 }}>
             <button className="btn primary" onClick={savePreferences}>Save preferences</button>
@@ -108,7 +118,7 @@ export default function Settings({ toast, dark, setDark }: { toast: Toast; dark:
         </div>
 
         <div className="panel">
-          <h3>Billing</h3><div className="psub">Managed by Stripe — card data never touches our servers</div>
+          <h3>Billing</h3><div className="psub">Managed by Stripe, card data never touches our servers</div>
           <div style={{ fontSize: 13, marginBottom: 14 }}>Current plan: <b>{me ? planLabel(me.plan) : '…'}</b></div>
           <div className="controls" style={{ marginBottom: 0 }}>
             <button className="btn" onClick={portal}>Open billing portal</button>

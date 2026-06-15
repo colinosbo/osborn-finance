@@ -5,12 +5,15 @@ import { Icon, type IconName } from '../icons';
 import type { Toast } from '../App';
 
 const FEATURES: Record<string, string[]> = {
-  personal: ['1 linked bank account', 'Full dashboard, ledger & reports', 'AI Advisor with savings tips', 'Subscription tracker', 'CSV import & data export'],
-  family: ['Up to 5 linked banks', 'All accounts grouped together', 'Weekly to yearly report PDFs', 'Subscription tracking across accounts', 'Everything in Personal'],
+  personal: ['1 linked bank account', 'Full dashboard, ledger & reports', 'AI Advisor with savings tips', 'Subscription tracker + bill-increase alerts', 'Savings goals with on-pace projections', 'CSV import & data export'],
+  family: ['Up to 5 linked banks', 'All accounts grouped together', 'Weekly to yearly report PDFs', 'Subscription & price-hike tracking across accounts', 'Shared savings goals', 'Everything in Personal'],
   enterprise: ['Unlimited linked banks', 'Full data export & audit history', 'Priority email support', 'Early access to new features', 'Everything in Personal+']
 };
-const PRICE: Record<string, string> = { personal: '$4.99', family: '$9.99', enterprise: '$24.99' };
-const PER: Record<string, string> = { personal: '/mo', family: '/mo', enterprise: '/mo' };
+// Monthly list price per tier. Annual billing gives 2 months free (pay for 10).
+const MONTHLY: Record<string, number> = { personal: 4.99, family: 9.99, enterprise: 24.99 };
+const annualTotal = (m: number) => m * 10;            // 2 months free
+const annualPerMonth = (m: number) => (m * 10) / 12;  // monthly-equivalent when billed yearly
+const money = (n: number) => '$' + n.toFixed(2).replace(/\.00$/, '');
 const META: Record<string, { icon: IconName; tagline: string; bestFor: string }> = {
   personal: { icon: 'profile', tagline: 'Get your money in order', bestFor: 'One bank, the full toolkit' },
   family: { icon: 'bank', tagline: 'Every account in one place', bestFor: 'Up to 5 linked banks' },
@@ -80,6 +83,7 @@ export default function Plans({ toast }: { toast: Toast }) {
   const [plans, setPlans] = useState<{ id: string; label: string }[]>([]);
   const [current, setCurrent] = useState('');
   const [celebrate, setCelebrate] = useState(false);
+  const [annual, setAnnual] = useState(false);
 
   useEffect(() => {
     api<{ id: string; label: string }[]>('/api/plans').then(setPlans);
@@ -117,6 +121,10 @@ export default function Plans({ toast }: { toast: Toast }) {
         <div className="land-eyebrow">Pricing</div>
         <h1 className="plans-title">Pick the plan that <span className="grad">fits your money</span></h1>
         <p className="plans-sub">Every paid plan starts with a 7-day free trial. No charge until it ends, cancel anytime in two clicks.</p>
+        <div className="billtoggle" role="group" aria-label="Billing period">
+          <button className={'billtog-opt' + (!annual ? ' on' : '')} onClick={() => setAnnual(false)}>Monthly</button>
+          <button className={'billtog-opt' + (annual ? ' on' : '')} onClick={() => setAnnual(true)}>Annual <span className="billtog-save">2 months free</span></button>
+        </div>
       </div>
 
       <div className="pricegrid">
@@ -133,7 +141,13 @@ export default function Plans({ toast }: { toast: Toast }) {
                   {m && <div className="pcard-tag">{m.tagline}</div>}
                 </div>
               </div>
-              <div className="pprice"><span className="grad">{PRICE[p.id]}</span><span className="pper"> {PER[p.id]}</span></div>
+              <div className="pprice">
+                <span className="grad">{money(annual ? annualPerMonth(MONTHLY[p.id]) : MONTHLY[p.id])}</span>
+                <span className="pper"> /mo{p.id === 'enterprise' ? ' / seat' : ''}</span>
+              </div>
+              <div className="pprice-note">{annual
+                ? <>{money(annualTotal(MONTHLY[p.id]))} billed yearly · <b>2 months free</b></>
+                : <>or {money(annualPerMonth(MONTHLY[p.id]))}/mo billed annually</>}</div>
               {m && <div className="pcard-best">{m.bestFor}</div>}
               <ul className="pfeat">{FEATURES[p.id].map(f => <li key={f}>{f}</li>)}</ul>
               {current === p.id

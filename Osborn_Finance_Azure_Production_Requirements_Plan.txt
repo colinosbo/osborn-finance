@@ -1,0 +1,534 @@
+===============================================================================
+OSBORN FINANCE
+Azure Production Requirements Plan (Lean / Cheapest Viable)
+Scope: only the services in the rock-bottom MVP doc, configured for a real
+       production launch handling financial data.
+Date: June 2026   |   Status: For build
+===============================================================================
+
+HOW TO READ THIS
+-------------------------------------------------------------------------------
+Each section has the same shape:
+  PURPOSE        what it is and why it exists
+  CONFIGURATION  the specific settings and values to use
+  SECURITY       the specific security settings to set
+  ACCEPTANCE     what must be true before you call it done
+
+Values in <angle brackets> are yours to fill in (region, domain, names).
+Anything not listed here is intentionally out of scope to keep cost down
+(no Redis, no Front Door/WAF, no private endpoints, no HA). Those are covered
+as future upgrades in the MVP cost doc, not here.
+
+Stack in scope:
+  1 Foundation (subscription, resource groups, identity, RBAC)
+  2 Networking and TLS
+  3 Compute: Azure Container Apps (Express API)
+  4 Database: Azure Database for PostgreSQL Flexible Server (Burstable)
+  5 Secrets: Container Apps secret store (Key Vault optional)
+  6 Container image: GitHub Container Registry (ghcr.io)
+  7 Frontend: Azure Static Web Apps (Free)
+  8 Observability and alerting: Azure Monitor / Log Analytics
+  9 Backup, restore, and disaster recovery
+ 10 CI/CD and Infrastructure as Code
+ 11 Cost controls
+ 12 Environment matrix (dev vs prod)
+ 13 Pre-launch acceptance checklist
+
+
+===============================================================================
+0. GLOBAL CONVENTIONS
+===============================================================================
+
+REGION
+  - Pick one region close to your users (for example <region> = eastus2) and put
+    EVERY resource in it. Same-region keeps latency low and avoids egress fees.
+
+RESOURCE GROUPS (one per environment)
+  - rg-osbornfin-prod
+  - rg-osbornfin-dev
+
+NAMING (lowercase, predictable)
+  - Container Apps env:   cae-osbornfin-prod
+  - Container App (API):  ca-osbornfin-api-prod
+  - Postgres:             pg-osbornfin-prod
+  - Static Web App:       swa-osbornfin-prod
+  - Log Analytics:        log-osbornfin-prod
+  - Key Vault (optional): kv-osbornfin-prod (must be globally unique)
+
+TAGS (apply to every resource)
+  - app=osborn-finance   env=prod|dev   owner=colin   costcenter=mvp
+
+PRINCIPLE
+  - Everything below is created by Infrastructure as Code (section 10), not by
+    hand, so prod and dev are identical except for size.
+
+
+===============================================================================
+1. FOUNDATION: SUBSCRIPTION, IDENTITY, RBAC
+===============================================================================
+
+PURPOSE
+  The account and identity baseline that everything else sits on.
+
+CONFIGURATION
+  - One Azure subscription, two resource groups (prod, dev) as above.
+  - Microsoft Entra ID is the identity provider for human and machine access.
+  - Create a system-assigned managed identity on the Container App (section 3).
+    This is how the API authenticates to other Azure resources with no stored
+    passwords.
+  - For CI/CD, use a user-assigned managed identity OR an app registration with
+    a federated credential (OIDC) scoped to the resource group (section 10).
+
+SECURITY
+  - Enforce MFA on every human account with portal access (Entra security
+    defaults or a Conditional Access policy).
+  - RBAC, least privilege:
+      * You: Owner on the subscription (or Contributor + User Access Admin).
+      * No other standing human access to prod data services.
+      * CI identity: Contributor scoped to rg-osbornfin-prod ONLY, nothing wider.
+  - Turn off any account-level "classic admin" access.
+  - No shared logins. Each person is a distinct Entra identity.
+
+ACCEPTANCE
+  - MFA proven on the admin account.
+  - CI identity cannot touch anything outside its resource group.
+  - No secrets or credentials exist outside Entra and the secret store.
+
+
+===============================================================================
+2. NETWORKING AND TLS
+===============================================================================
+
+PURPOSE
+  Keep the public surface tiny and encrypted, without paying for private
+  networking yet.
+
+CONFIGURATION
+  - Public ingress exists in exactly two places: the Container App (API) and the
+    Static Web App (frontend). Nothing else is reachable from the internet.
+  - PostgreSQL stays on public endpoint BUT firewalled (no private endpoint to
+    save cost). Lock it as follows:
+      * Disable "Allow public access from any Azure service".
+      * Retrieve the Container Apps environment static outbound IP(s) and add
+        ONLY those to the Postgres firewall allow-list.
+      * Add your own admin IP temporarily for setup, then remove it.
+  - No VNet is required for this lean setup. (A VNet + stable egress is a later
+    upgrade if/when you move Postgres to a private endpoint.)
+
+SECURITY
+  - TLS 1.2 minimum everywhere. No plaintext HTTP anywhere.
+  - Container App ingress: HTTPS only (allowInsecure = false), redirect/blocked
+    HTTP.
+  - Static Web Apps: HTTPS enforced automatically with its managed certificate.
+  - PostgreSQL: require_secure_transport = ON, minimum TLS = 1.2.
+  - CORS on the API is restricted to the frontend origin only
+    (https://<yourdomain>), not "*".
+
+ACCEPTANCE
+  - Postgres rejects any connection except from the Container App egress IP(s)
+    and rejects non-SSL connections.
+  - curl http://<api> is refused or redirected to https.
+  - The API only accepts cross-origin calls from your domain.
+
+
+===============================================================================
+3. COMPUTE: AZURE CONTAINER APPS (EXPRESS API)
+===============================================================================
+
+PURPOSE
+  Runs the stateless Node/Express API container with managed HTTPS and autoscale.
+
+CONFIGURATION
+  - Environment: Consumption workload profile (cae-osbornfin-prod), with the
+    Log Analytics workspace (section 8) attached for logs.
+  - Container resources: 0.5 vCPU, 1.0 GiB memory (a valid Container Apps combo).
+  - Scaling:
+      * Production: min replicas = 1, max replicas = 3.
+      * Dev: min replicas = 0 (scale to zero).
+      * Scale rule: HTTP concurrency, target ~50 concurrent requests per replica.
+  - Ingress:
+      * External, HTTPS only, transport = auto (http1/http2).
+      * Target port = the API listen port (the app serves on 4000; set target
+        port to match, or set PORT to 8080 and listen on it, just keep them
+        aligned).
+      * Session affinity = off (API is stateless).
+  - Revisions: single active revision mode; new revision per deploy; pin the
+    image by DIGEST (not a moving tag) for reproducible deploys.
+  - Health probes (add a lightweight GET /api/health in the app if missing):
+      * Liveness:  GET /api/health, period 30s.
+      * Readiness: GET /api/health, initial delay 5s.
+      * Startup:   GET /api/health, generous failureThreshold for cold start.
+  - Environment variables (non-secret as plain env, secret as secretRef):
+      * NODE_ENV=production
+      * PORT=<ingress target port>
+      * TRUST_PROXY=1 (Express must trust the Container Apps proxy for correct
+        client IP and HTTPS detection)
+      * WEB_ORIGIN=https://<yourdomain> (for CORS)
+      * DATABASE_URL            -> secretRef
+      * PLAID_CLIENT_ID         -> secretRef
+      * PLAID_SECRET            -> secretRef
+      * PLAID_ENV=sandbox|production
+      * STRIPE_SECRET_KEY       -> secretRef
+      * STRIPE_WEBHOOK_SECRET   -> secretRef
+      * ENCRYPTION_KEY          -> secretRef (the bank-token encryption key)
+
+SECURITY
+  - System-assigned managed identity ENABLED (used for Key Vault if adopted).
+  - Image pulled from GHCR using a registry secret (read:packages PAT), stored
+    as a Container App secret, never inline.
+  - Container runs as a non-root user; do not run privileged.
+  - No secret is ever a plain environment value; all sensitive values use
+    secretRef to the secret store (section 5).
+  - Rate limiting and security headers are set in Express (helmet or equivalent):
+    HSTS, X-Content-Type-Options=nosniff, X-Frame-Options=DENY or CSP
+    frame-ancestors 'none', Referrer-Policy=strict-origin-when-cross-origin.
+  - Stripe webhook route verifies the Stripe signature using STRIPE_WEBHOOK_SECRET
+    before processing.
+
+ACCEPTANCE
+  - API reachable only over HTTPS, returns 200 on /api/health.
+  - At least one replica always running in prod (no cold start on webhooks).
+  - No secret visible in the revision's plain environment variables.
+  - Security headers present on responses (verify with curl -I).
+
+
+===============================================================================
+4. DATABASE: POSTGRESQL FLEXIBLE SERVER (BURSTABLE)
+===============================================================================
+
+PURPOSE
+  The system of record. Your only meaningful recurring cost, so size it small
+  and protect it well.
+
+CONFIGURATION
+  - Tier: Burstable, SKU B1ms (1 vCore, 2 GiB RAM).
+  - PostgreSQL version: 16 (or the latest GA you are comfortable supporting).
+  - Storage: 32 GiB, storage auto-grow = ON (you can grow but never shrink, so
+    start small).
+  - High availability: DISABLED (cost). Single zone.
+  - Compute auto-stop: OFF for production (a live app must stay up). Dev may stop.
+  - Maintenance window: set to a fixed off-peak hour (for example Sunday 03:00).
+  - Connections: B1ms supports only a small number of connections (on the order
+    of a few dozen). Configure the app's pg pool to a small max (5 to 10) and do
+    NOT open a connection per request.
+  - Database/role layout:
+      * Keep the server admin credential for administration only.
+      * Create a dedicated application role (for example osbornapp) with rights
+        limited to the app database (connect, select/insert/update/delete on the
+        app schema), not a superuser.
+      * The API connects as osbornapp via DATABASE_URL.
+
+SECURITY
+  - require_secure_transport = ON (reject non-SSL connections).
+  - Minimum TLS version = 1.2.
+  - Firewall: only the Container Apps egress IP(s) (section 2). "Allow access
+    from Azure services" = OFF. No 0.0.0.0 rule.
+  - Encryption at rest: platform-managed keys (default, free).
+  - Strong, randomly generated passwords for both the admin and app roles,
+    stored only in the secret store.
+  - Server logs: enable log_connections and log_disconnections; send logs to
+    Log Analytics via diagnostic settings (section 8).
+
+ACCEPTANCE
+  - Connecting without SSL fails.
+  - Connecting from any IP other than the API egress fails.
+  - The app connects as the limited role, not the admin.
+  - A test query from the API succeeds end to end.
+
+
+===============================================================================
+5. SECRETS: CONTAINER APPS SECRET STORE (KEY VAULT OPTIONAL)
+===============================================================================
+
+PURPOSE
+  Hold Plaid, Stripe, database, and encryption secrets so they never touch code
+  or images.
+
+CONFIGURATION (default, $0)
+  - Use the built-in Container Apps secrets feature. Define these secrets and
+    reference them from env vars via secretRef:
+      * database-url
+      * plaid-client-id
+      * plaid-secret
+      * stripe-secret-key
+      * stripe-webhook-secret
+      * encryption-key
+      * ghcr-pat (registry pull token)
+  - Rotation: update the secret value, then deploy a new revision so it is
+    picked up. Document this as the rotation procedure.
+
+OPTIONAL UPGRADE (Key Vault, ~$1 to $3/month)
+  - Create Key Vault kv-osbornfin-prod with:
+      * RBAC authorization model (not access policies).
+      * Soft-delete ON (default) and purge protection ON.
+  - Grant the Container App's managed identity the role "Key Vault Secrets User".
+  - Store the same secrets in Key Vault and use Key Vault references from
+    Container Apps. Adopt this once you have paying users and want audit,
+    versioning, and rotation history.
+
+SECURITY
+  - Secrets exist ONLY in the secret store (or Key Vault). Never in the image,
+    never in a committed .env, never in plain env vars.
+  - .env and any local secret files are in .gitignore.
+  - Rotate Plaid and Stripe keys on a schedule (for example every 90 days) and
+    immediately if exposure is suspected.
+  - The bank-token ENCRYPTION_KEY is treated as the highest-value secret;
+    rotating it requires a re-encryption plan, document it.
+
+ACCEPTANCE
+  - No secret appears in the repo, the image, or the plain env of a revision.
+  - Rotating a secret and redeploying works without code changes.
+
+
+===============================================================================
+6. CONTAINER IMAGE: GITHUB CONTAINER REGISTRY (ghcr.io)
+===============================================================================
+
+PURPOSE
+  Stores the API image for Container Apps to pull, at no cost.
+
+CONFIGURATION
+  - Build in GitHub Actions; tag images by git commit SHA:
+    ghcr.io/<org>/osborn-api:<sha> (plus an optional :latest for convenience).
+  - Make the package PRIVATE.
+  - Pull credential: a fine-grained PAT (or a dedicated machine user) with the
+    read:packages scope only, stored as the Container App secret ghcr-pat.
+  - Deployments reference the image by DIGEST (sha256:...) for immutability.
+
+SECURITY
+  - Package visibility = private; least-scope pull token (read:packages only).
+  - Enable image vulnerability scanning / Dependabot on the repo.
+  - Never bake secrets into the image; verify by scanning the built image.
+  - Rotate the pull PAT periodically.
+
+ACCEPTANCE
+  - Container Apps pulls the private image successfully via the stored token.
+  - A known commit maps to a known immutable digest in prod.
+
+
+===============================================================================
+7. FRONTEND: AZURE STATIC WEB APPS (FREE TIER)
+===============================================================================
+
+PURPOSE
+  Serves the React (Vite) build globally with free TLS.
+
+CONFIGURATION
+  - Tier: Free.
+  - Build via GitHub Actions: build command npm run build, output location dist.
+  - Custom domain <yourdomain> with the free managed certificate; HTTPS enforced.
+  - staticwebapp.config.json:
+      * SPA fallback: route all unknown paths to /index.html.
+      * Global security headers (see SECURITY).
+      * Do NOT proxy secrets; the frontend calls the API origin directly (CORS
+        is handled by the API, section 3).
+
+SECURITY
+  - Only PUBLIC values ship in the frontend bundle (Stripe publishable key,
+    and Plaid link tokens fetched at runtime from the backend). No secret keys.
+  - Security headers via staticwebapp.config.json globalHeaders:
+      * Content-Security-Policy (lock script/style/connect sources to self,
+        your API origin, Stripe, and Plaid as needed)
+      * Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
+      * X-Content-Type-Options: nosniff
+      * Referrer-Policy: strict-origin-when-cross-origin
+      * X-Frame-Options: DENY (or CSP frame-ancestors 'none')
+  - HTTPS only; no mixed content.
+
+ACCEPTANCE
+  - Site loads only over HTTPS on the custom domain.
+  - Response headers include the security headers above.
+  - No secret key is present anywhere in the shipped JS bundle.
+
+
+===============================================================================
+8. OBSERVABILITY AND ALERTING: AZURE MONITOR / LOG ANALYTICS
+===============================================================================
+
+PURPOSE
+  See errors, keep an audit trail, and get paged when something breaks, without
+  runaway logging cost.
+
+CONFIGURATION
+  - One Log Analytics workspace (log-osbornfin-prod):
+      * Retention: 30 days.
+      * Daily ingestion cap: 1 GB/day (prevents bill surprises).
+  - Diagnostic settings to the workspace from:
+      * Container Apps (console logs + system logs).
+      * PostgreSQL (PostgreSQL logs + metrics).
+  - Application Insights: optional. If used, set sampling to ~10 to 25 percent
+    to control cost. For the leanest start, rely on Container Apps logs and add
+    App Insights later.
+  - One action group (email + SMS to you) for all alerts.
+
+ALERTS (minimum set)
+  - API availability: alert if /api/health fails or 5xx rate exceeds a threshold
+    over 5 minutes.
+  - Postgres CPU > 80% for 10 minutes.
+  - Postgres storage > 80% used.
+  - Webhook failures: log-query alert on repeated Stripe/Plaid webhook errors.
+  - Budget alerts (section 11).
+
+SECURITY
+  - Logs may contain personal data: keep retention bounded, restrict workspace
+    read access to you, and do not log secrets, full tokens, or full PANs (rely
+    on Stripe for card data).
+
+ACCEPTANCE
+  - Logs from API and Postgres are visible in the workspace.
+  - A forced test failure triggers the availability alert to your phone/email.
+  - Daily cap is set.
+
+
+===============================================================================
+9. BACKUP, RESTORE, AND DISASTER RECOVERY
+===============================================================================
+
+PURPOSE
+  For an early finance SaaS, accidental data loss is a bigger risk than being
+  hacked. This section is non-negotiable even at rock-bottom cost.
+
+CONFIGURATION
+  - PostgreSQL automated backups: ON (default), retention 7 to 35 days, with
+    point-in-time restore. Backup redundancy = locally redundant (LRS) to save
+    cost (geo-redundant is a later upgrade).
+  - Infrastructure as Code (section 10) is the backup of the environment itself.
+  - The container image in GHCR is the backup of the running app; any tagged
+    digest can be redeployed.
+
+RESTORE / DR RUNBOOK (write it down, keep in repo)
+  - To recover data: point-in-time restore the Postgres server to a new server,
+    repoint DATABASE_URL, deploy a new API revision.
+  - To rebuild the environment: re-run the IaC into a fresh resource group,
+    restore the database, redeploy the image.
+  - Targets to agree and document: RPO about 5 minutes (PITR granularity),
+    RTO about 1 to 4 hours.
+
+SECURITY / VALIDATION
+  - Run a TEST RESTORE at least quarterly and after any major schema change.
+    A backup you have never restored is not a backup.
+
+ACCEPTANCE
+  - A test restore has been completed successfully and timed.
+  - The DR runbook exists and a second person could follow it.
+
+
+===============================================================================
+10. CI/CD AND INFRASTRUCTURE AS CODE
+===============================================================================
+
+PURPOSE
+  Make every deploy and every environment reproducible, with no stored cloud
+  credentials.
+
+CONFIGURATION
+  - Infrastructure as Code: Bicep (recommended) committed in the repo, one
+    parameter file per environment (dev, prod). Resource groups, Container Apps,
+    Postgres, Static Web Apps, Log Analytics, and (optional) Key Vault are all
+    defined here.
+  - Pipelines (GitHub Actions):
+      * CI: install, typecheck, test on every PR.
+      * Build: build the image, push to GHCR tagged by SHA.
+      * Deploy API: az containerapp update to the new image digest.
+      * Deploy frontend: Static Web Apps build/deploy action.
+  - Promotion: dev deploys automatically on merge to main; prod deploys on a
+    git tag or a manual approval gate.
+
+SECURITY
+  - Azure auth from GitHub uses OIDC federation (azure/login with a federated
+    credential), so NO cloud secret is stored in GitHub.
+  - The federated identity has Contributor on rg-osbornfin-prod only.
+  - GitHub Actions secrets (GHCR token, etc.) use the repo's encrypted secrets;
+    least privilege; no secret echoed in logs.
+  - Protected main branch; required PR review; required status checks.
+
+ACCEPTANCE
+  - A clean clone can provision dev from IaC with no manual portal steps.
+  - A deploy runs with no long-lived Azure credential stored anywhere.
+
+
+===============================================================================
+11. COST CONTROLS
+===============================================================================
+
+PURPOSE
+  Keep the bill where we said it would be (~$30 to $40/month prod).
+
+CONFIGURATION
+  - Azure Cost Management budget on the subscription:
+      * Budget = $60/month, alerts at 50% ($30), 80% ($48), 100% ($60).
+  - Dev environment: Container Apps min replicas = 0 (scale to zero).
+  - Log Analytics daily cap = 1 GB/day.
+  - Postgres: Burstable B1ms, 32 GiB, no HA, LRS backups.
+  - No geo-redundancy, no second region, no premium tiers.
+
+ACCEPTANCE
+  - Budget and alert emails are configured and tested.
+  - Dev compute is at or near $0 when idle.
+
+
+===============================================================================
+12. ENVIRONMENT MATRIX (DEV vs PROD)
+===============================================================================
+
+  Item                     Dev                      Production
+  ---------------------------------------------------------------------------
+  Container Apps min repl  0 (scale to zero)        1 (always warm)
+  Container size           0.25 vCPU / 0.5 GiB      0.5 vCPU / 1.0 GiB
+  PostgreSQL               B1ms, no HA, may stop    B1ms, no HA, always on
+  PG backup retention      7 days                   14 to 35 days
+  Static Web Apps          Free                     Free
+  Secrets                  Container Apps store     Container Apps store
+                                                    (Key Vault optional)
+  Logging                  minimal, short retention 30 days, 1 GB/day cap
+  Custom domain            optional                 yes, HTTPS enforced
+  Deploy trigger           auto on merge to main    tag or manual approval
+
+
+===============================================================================
+13. PRE-LAUNCH ACCEPTANCE CHECKLIST
+===============================================================================
+
+  IDENTITY & ACCESS
+  [ ] Admin account has MFA.
+  [ ] CI identity is Contributor on the prod resource group only.
+  [ ] No shared logins, no classic admin.
+
+  NETWORK & TLS
+  [ ] Only the API and the frontend are public.
+  [ ] Postgres firewall allows only the API egress IP(s); no Azure-services rule.
+  [ ] TLS 1.2+ enforced on API, frontend, and database.
+  [ ] CORS limited to your domain.
+
+  COMPUTE
+  [ ] Prod min replicas = 1; /api/health returns 200.
+  [ ] Image pinned by digest; pulled from private GHCR via stored token.
+  [ ] Security headers present; container runs as non-root.
+
+  DATABASE
+  [ ] require_secure_transport ON; non-SSL connections rejected.
+  [ ] App connects as a limited role, not admin.
+  [ ] Auto-backups ON; a test restore has been completed.
+
+  SECRETS
+  [ ] All secrets in the secret store (or Key Vault); none in repo/image/env.
+  [ ] Rotation procedure documented and tested once.
+
+  FRONTEND
+  [ ] HTTPS only on custom domain; security headers set.
+  [ ] No secret key in the JS bundle.
+
+  OBSERVABILITY
+  [ ] API and Postgres logs flowing to Log Analytics; 30-day retention; 1 GB cap.
+  [ ] Availability and Postgres alerts fire to your phone/email.
+
+  COST
+  [ ] $60 budget with alerts configured.
+  [ ] Dev scales to zero.
+
+  DR
+  [ ] DR runbook written; RPO/RTO agreed; restore tested.
+
+===============================================================================
+END OF DOCUMENT
+===============================================================================

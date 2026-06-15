@@ -1,0 +1,250 @@
+===============================================================================
+OSBORN FINANCE
+Azure Infrastructure, ROCK-BOTTOM MVP Edition
+Target: first 10 to 100 users (and your first paying customers)
+Goal: lowest possible monthly cost on Azure
+Date: June 2026   |   Status: For review
+===============================================================================
+
+BOTTOM LINE
+-------------------------------------------------------------------------------
+Pushed as low as it realistically goes on Azure. Dev can sit near the database
+floor (~$15) by scaling compute to zero. Production, with one always-on API
+replica for reliable webhooks, runs about $30 to $40 per month. Almost all of
+it is the database; everything else uses free tiers, free grants, or scale to
+zero.
+
+The one cost you cannot avoid: a small managed Postgres (~$15 to $25).
+Everything else: ~$0 at MVP traffic.
+
+Changes from the previous lean plan (all to cut cost):
+  - Container Apps set to scale to zero, fits inside the monthly free grant.
+  - Container Registry REMOVED, use GitHub Container Registry (free) instead.
+  - Static Web Apps moved from Standard to Free tier (custom domain still free).
+  - Key Vault made optional, use the free built-in Container Apps secret store.
+  - Logging trimmed to the free ingestion allowance.
+
+New estimated total: production ~$30 to $40 / month, dev ~$15.
+
+
+===============================================================================
+1. THE ESSENTIAL SERVICES (LEANEST POSSIBLE)
+===============================================================================
+
+  -----------------------------------------------------------------------------
+  1) AZURE CONTAINER APPS               Runs your Express API
+  -----------------------------------------------------------------------------
+     Why: your API is a single Node container. Managed HTTPS, autoscale, no
+          cluster to manage.
+     Recommended setup:
+          Production: min replicas = 1, 0.25 to 0.5 vCPU. Keeping one replica
+            always warm means Plaid and Stripe webhooks are never sent to a
+            cold start. The few dollars this costs is worth the reliability.
+          Dev / test: min replicas = 0 (scale to zero). Azure gives every
+            subscription a monthly free grant (about 180,000 vCPU-seconds,
+            360,000 GiB-seconds, and 2 million requests), so dev is ~$0.
+     Trade-off of scale to zero: a few-second cold start on the first request
+          after idle. Fine for dev, not ideal for production webhooks, which is
+          why production keeps min = 1.
+     Cost: dev ~$0, production ~$5 to $12 / month.
+
+  -----------------------------------------------------------------------------
+  2) AZURE DATABASE FOR POSTGRESQL (FLEXIBLE SERVER, BURSTABLE)
+  -----------------------------------------------------------------------------
+     Why: your system of record. The app cannot run without it. This is your
+          only meaningful cost, so optimize it and accept it.
+     Cheapest setup: Burstable B1ms, NO high availability, 32 GB storage
+          (smallest, grow later, you cannot shrink it), locally redundant
+          backups (not geo-redundant), 7-day retention.
+     Cost: ~$13 to $20 / month.
+     Note: this is the floor. See section 5 for a near-$0 off-Azure option and
+          why I do not recommend it for a finance app yet.
+
+  -----------------------------------------------------------------------------
+  3) SECRETS: CONTAINER APPS SECRET STORE (default), KEY VAULT (optional)
+  -----------------------------------------------------------------------------
+     Why: you hold Plaid secrets, Stripe secrets, and your bank-token
+          encryption key. They must never sit in code or the image.
+     Cheapest setup: use the built-in Container Apps secrets feature. It is
+          free, encrypted, and injected as environment variables at runtime.
+     Optional upgrade: Azure Key Vault (~$1 to $3 / month) adds audit logging,
+          versioning, and rotation. Worth adding once you have paying users,
+          but not required to launch.
+     Cost: $0 (Container Apps secrets) or ~$1 to $3 (Key Vault).
+
+  -----------------------------------------------------------------------------
+  4) CONTAINER IMAGE REGISTRY: GITHUB CONTAINER REGISTRY (ghcr.io)
+  -----------------------------------------------------------------------------
+     Why: Container Apps needs to pull your image from somewhere.
+     Cheapest setup: push the image to GitHub Container Registry (free with
+          your repo) and have Container Apps pull it using a token stored as a
+          Container Apps secret. This removes Azure Container Registry entirely.
+     Cost: $0 (was ~$5 / month for ACR Basic).
+     Add ACR later: only if you want everything inside Azure with private,
+          Entra-based pulls.
+
+  -----------------------------------------------------------------------------
+  5) AZURE STATIC WEB APPS (FREE TIER)        Hosts your React frontend
+  -----------------------------------------------------------------------------
+     Why: your Vite build is static files. Served globally with free TLS.
+     Cheapest setup: Free tier. It still supports a custom domain and free SSL.
+          The Standard tier only matters later (SLA, more domains, private
+          endpoints), so skip it for now.
+     Cost: $0 (was up to $9 / month).
+
+  -----------------------------------------------------------------------------
+  6) LOGGING: FREE INGESTION ALLOWANCE
+  -----------------------------------------------------------------------------
+     Why: you still need to see errors. Just keep it tiny.
+     Cheapest setup: stream Container Apps console logs, and if you attach a
+          Log Analytics workspace, keep retention at 30 days and stay within
+          the free monthly ingestion allowance. Add only two alerts: "API
+          down" and "database almost full".
+     Cost: ~$3 to $10 / month. It can be near zero, but Azure logging costs
+          have a habit of creeping up, so budget a little headroom.
+
+
+===============================================================================
+2. WHAT IS CUT (AND WHEN TO BRING IT BACK)
+===============================================================================
+
+Same cuts as the lean plan, now with the registry and a couple of tiers cut
+further. None of this is needed for your first customers.
+
+  CUT NOW                         BRING BACK WHEN              ROUGH COST LATER
+  ---------------------------------------------------------------------------
+  Azure Container Registry        You want all-Azure private  ~$5 / mo
+                                  image pulls
+  Static Web Apps Standard        You need an SLA or private  ~$9 / mo
+                                  endpoints
+  Key Vault                       You have paying users and   ~$1 to $3 / mo
+                                  want audit + rotation
+  Redis                           You run 2+ API replicas     ~$16 to $90 / mo
+                                  (roughly 500+ users)
+  Front Door + WAF                Real WAF/DDoS need,         ~$40 to $70 / mo
+                                  compliance, or meaningful
+                                  public traffic
+  Zonal HA PostgreSQL             Downtime costs real money   doubles DB cost
+                                  (roughly 1,000+ users)
+  Private Endpoints               Revenue > $1k / month or    ~$10 to $30+ / mo
+                                  compliance asks
+  Multi-region, Defender,         Compliance scope (SOC 2),   varies
+  Sentinel, DDoS Standard         stricter uptime targets
+
+
+===============================================================================
+3. ROCK-BOTTOM ARCHITECTURE (WHAT TO DEPLOY)
+===============================================================================
+
+                          Internet
+                             |
+                  +----------+-----------+
+                  |                      |
+          Static Web App           Container App
+         (React SPA, Free)        (Express API,
+                                  scale to zero,
+                                  secrets built in)
+                                        |
+                                 PostgreSQL Flexible
+                                  Server (Burstable)
+
+     Image source: GitHub Container Registry (ghcr.io), pulled by Container Apps
+
+     NOT deployed: ACR, Key Vault, Redis, Front Door, WAF, HA Postgres,
+                   Private Endpoints, multi-region, Sentinel, Defender.
+
+
+===============================================================================
+4. ESTIMATED MONTHLY COST
+===============================================================================
+
+     Service                          Dev (scale-zero)   Production (min 1)
+     ----------------------------------------------------------------------
+     Container App                    $0  (free grant)   $5 to $12
+     PostgreSQL (Burstable B1ms)      $13 to $20         $15 to $25
+     Secrets (Container Apps store)   $0                 $0  (Key Vault +$1-3)
+     Image registry (GitHub, free)    $0                 $0
+     Static Web App (Free tier)       $0                 $0
+     Logging                          $0 to $3           $3 to $10
+     ----------------------------------------------------------------------
+     TOTAL                            ~$13 to $26        ~$23 to $47
+
+     Realistic production budget: about $30 to $40 / month.
+     Dev can sit near the database floor (~$15) by scaling compute to zero.
+
+     Note: estimates only, not financial advice. Excludes data egress, Plaid
+     and Stripe fees, and Azure support plans. Confirm in the Azure Pricing
+     Calculator for your region before committing.
+
+
+===============================================================================
+5. IF YOU WANT TO GET THE DATABASE TO $0 (READ THE CAVEATS)
+===============================================================================
+
+The database is your only real cost. You can take it to $0 with an external
+free-tier Postgres such as Neon or Supabase, which Container Apps can connect
+to over a normal SSL connection string.
+
+Why I do NOT recommend this yet for a finance app:
+  - Free tiers auto-suspend when idle, adding cold-start latency on top of your
+    Container App cold start.
+  - No meaningful SLA, lower connection limits, and your financial data sits
+    outside Azure (data residency and one more vendor to trust).
+  - Migrating later is real work.
+
+Recommendation: pay the ~$13 to $20 for Azure Burstable Postgres. It is the
+single best dollar-for-reliability item in the whole stack. Revisit only if
+you are pre-revenue and truly need $0.
+
+
+===============================================================================
+6. SECURITY YOU SHOULD NOT CUT (EVEN AT ROCK-BOTTOM COST)
+===============================================================================
+
+These cost little or nothing and matter because you handle financial data.
+
+  TOP PRIORITY, DATA LOSS: for an early finance SaaS, losing data by accident
+  is a bigger risk than being hacked. Enable PostgreSQL automatic backups (on
+  by default), keep point-in-time restore at 7+ days, and actually run a test
+  restore once so you know it works before you ever need it.
+
+  - Keep secrets in the Container Apps secret store (or Key Vault), never in
+    code, the image, or a committed env file.
+  - Enforce TLS everywhere (Container Apps and Static Web Apps give HTTPS free;
+    redirect HTTP to HTTPS).
+  - On PostgreSQL: require SSL, set the firewall to allow only what needs in,
+    and use a strong, unique credential.
+  - Let Stripe handle card data so you never store it (keeps PCI scope small).
+  - Rate-limit and set basic security headers in Express (free, replaces the
+    early need for a WAF).
+
+Note: with Container Apps scaling to zero, its outbound IP can change, which
+makes a strict database IP allow-list awkward. Easiest cheap path: require SSL
+plus a strong credential now, and add private networking later when revenue
+justifies it.
+
+
+===============================================================================
+7. WHEN TO ADD THINGS BACK (SCALING TRIGGERS)
+===============================================================================
+
+     Trigger                            Add
+     ---------------------------------------------------------------
+     Have paying users                  Key Vault for secrets
+     Need WAF rules, starting            Front Door + WAF
+       compliance work, or meaningful   (driven by need and traffic,
+       public traffic                    not raw user count)
+     Run 2+ API replicas (~500 users)   Redis for shared state
+     Downtime costs real money           HA PostgreSQL (zonal standby)
+       (~1,000+ users)
+     Revenue > $1k / month              Private Endpoints + fuller security
+     Stricter uptime needs              Multi-region + DB read replica
+     Compliance scope (SOC 2, etc.)     Sentinel, DDoS Standard, longer
+                                        retention
+
+     Most of these are configuration changes or additions, not rebuilds, so
+     starting at rock bottom does not paint you into a corner.
+
+===============================================================================
+END OF DOCUMENT
+===============================================================================

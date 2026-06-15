@@ -57,9 +57,3 @@ export const TIMEZONES = Array.from(new Set([
   'America/Phoenix', 'America/Anchorage', 'Pacific/Honolulu', 'UTC',
   'Europe/London', 'Europe/Paris', 'Asia/Tokyo', 'Australia/Sydney'
 ]));
-export const RANGES: { v: number; l: string }[] = [
-  { v: 30, l: 'Last 30 days' },
-  { v: 90, l: 'Last 90 days' },
-  { v: 365, l: 'Last 12 months' },
-  { v: 0, l: 'All time' }
-];

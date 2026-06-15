@@ -10,18 +10,36 @@ import { schemas, parse } from './validate.js';
 import { makeStore, type Store, type User } from './store.js';
 import { classify, merchant, cleanDesc, ALL_CATS } from './classifier.js';
 import { parseCSV, autoMap, parseDateStr, parseAmtStr } from './csv.js';
-import { summarize, advise } from './analytics.js';
+import { summarize } from './analytics.js';
+import { buildAdvisor } from './advisor.js';
 import { Plaid, runItemSync, encryptToken, verifyPlaidWebhook } from './plaid.js';
 import { Billing, PLAN_PRICES, parseStripeEvent, verifyStripeSignature, fetchSubscriptionPlan } from './stripe.js';
 import { decrypt } from './crypto.js';
-import { buildReport, buildRangeReport, CADENCES, type Cadence } from './reports.js';
+import { buildReport, buildRangeReport, buildMonthReport, CADENCES, type Cadence } from './reports.js';
 import { detectRecurring } from './recurring.js';
+import { projectGoals } from './goals.js';
+import { buildDebtPlan } from './debt.js';
+
+// Resolve a request's time window to [from (exclusive), to (inclusive)]. Accepts an
+// explicit calendar month (from/to) or a rolling day-window (days), anchored on today.
+function rangeWindow(query: Record<string, unknown>, today: string, defDays: number): { from: string; to: string } {
+  const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+  const qf = typeof query.from === 'string' && dateRe.test(query.from) ? query.from : '';
+  const qt = typeof query.to === 'string' && dateRe.test(query.to) ? query.to : '';
+  if (qf) return { from: qf, to: qt || today };
+  const days = query.days != null ? Math.max(0, Math.min(100000, Number(query.days) || 0)) : defDays;
+  const from = days ? new Date(Date.parse(today) - days * 864e5).toISOString().slice(0, 10) : '';
+  return { from, to: today };
+}
 
 export async function buildApp(store: Store) {
   const app = express();
   // Behind Front Door / a reverse proxy: trust the first XFF hop so req.ip and
   // rate-limit keys reflect the real client (L3).
   app.set('trust proxy', 1);
+  // Dynamic financial responses should never be served as an empty 304; disabling
+  // ETags avoids conditional-request empty bodies the client can't parse as JSON.
+  app.set('etag', false);
   app.use(helmet());
   app.use(cors({ origin: cfg.appBaseUrl }));
   app.use(rateLimit({ windowMs: 60_000, max: 300 }));
@@ -153,7 +171,7 @@ export async function buildApp(store: Store) {
     res.json({ ...u(req), items: items.map(i => ({ id: i.id, institution: i.institution_name, status: i.status })), subscription: sub });
   });
   app.get('/api/me/export', async (req, res) => {
-    res.json({ user: u(req), transactions: await store.allTx(u(req).id), accounts: await store.listAccounts(u(req).id), overrides: await store.getOverrides(u(req).id) });
+    res.json({ user: u(req), transactions: await store.allTx(u(req).id), accounts: await store.listAccounts(u(req).id), overrides: await store.getOverrides(u(req).id), goals: await store.listGoals(u(req).id) });
   });
   app.delete('/api/me', async (req, res) => {
     for (const it of await store.listItems(u(req).id)) { try { await Plaid.removeItem(decrypt(it.access_token_ciphertext)); } catch { /* item may be gone */ } }
@@ -208,12 +226,13 @@ export async function buildApp(store: Store) {
     const v = parse(schemas.transactionsQuery, req.query); // I3
     if (!v.ok) return res.status(400).json({ error: v.error });
     const q = v.data;
-    const days = q.days || 0;
-    const all = await store.allTx(u(req).id);
-    const latest = all.length ? all[all.length - 1].date : new Date().toISOString().slice(0, 10);
-    const from = days ? new Date(Date.parse(latest) - days * 864e5).toISOString().slice(0, 10) : undefined;
+    const today = new Date().toISOString().slice(0, 10);
+    // Explicit from/to (a calendar month) wins; otherwise a rolling day-window anchored on today.
+    let from: string | undefined, to: string | undefined;
+    if (q.from) { from = q.from; to = q.to; }
+    else { const days = q.days || 0; from = days ? new Date(Date.parse(today) - days * 864e5).toISOString().slice(0, 10) : undefined; }
     const r = await store.listTx(u(req).id, {
-      from, cat: q.cat, flow: q.flow, search: q.q,
+      from, to, cat: q.cat, flow: q.flow, search: q.q,
       limit: q.limit || 25, offset: q.offset || 0,
       sort: q.sort || 'date', dir: q.dir || 'desc'
     });
@@ -227,18 +246,57 @@ export async function buildApp(store: Store) {
     const n = await store.setCategoryByMerchant(u(req).id, m, category);
     res.json({ updated: n });
   });
+  // Re-apply the current classifier rules (and saved overrides) to every existing
+  // transaction. Useful after the rules improve, so old data picks up the changes.
+  app.post('/api/transactions/reclassify', async (req, res) => {
+    const userId = u(req).id;
+    const txs = await store.allTx(userId);
+    const overrides = await store.getOverrides(userId);
+    const updates: { id: string; category: string }[] = [];
+    for (const t of txs) {
+      let cat: string;
+      if (t.amount > 0) cat = 'Income & Refunds';
+      else { cat = classify(t.name, t.amount); if (overrides[t.merchant]) cat = overrides[t.merchant]; }
+      if (cat !== t.category) updates.push({ id: t.id, category: cat });
+    }
+    const n = await store.setTxCategories(userId, updates);
+    await store.audit(userId, 'reclassify', `${n} txns`, ipHash(req));
+    res.json({ updated: n, total: txs.length });
+  });
   app.get('/api/categories', (_q, res) => res.json(ALL_CATS));
+  // Months the user actually has activity in, most recent first, capped to the
+  // last 12. A month is only listed if at least one transaction falls inside that
+  // month's window using the EXACT same filter the summary route uses (from = last
+  // day of prev month, exclusive; to = last day of this month, inclusive). Sharing
+  // the predicate guarantees a listed month can never come back empty in summary.
+  app.get('/api/tx-months', async (req, res) => {
+    const tx = await store.allTx(u(req).id);
+    const monthWindow = (ym: string) => {
+      const [y, m] = ym.split('-').map(Number);
+      return {
+        from: new Date(Date.UTC(y, m - 1, 0)).toISOString().slice(0, 10),
+        to: new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10)
+      };
+    };
+    const candidates = new Set<string>();
+    for (const t of tx) candidates.add(t.date.slice(0, 7));
+    const months = [...candidates]
+      .filter(ym => { const { from, to } = monthWindow(ym); return tx.some(t => t.date > from && t.date <= to); })
+      .sort().reverse().slice(0, 12);
+    res.json({ months });
+  });
 
   // ---- summary + advisor (F7/F8/F10) ----
   app.get('/api/summary', async (req, res) => {
     const tx = await store.allTx(u(req).id);
-    const latest = tx.length ? tx[tx.length - 1].date : new Date().toISOString().slice(0, 10);
-    res.json(summarize(tx, +(req.query.days || 365), latest));
+    const { from, to } = rangeWindow(req.query, new Date().toISOString().slice(0, 10), 365);
+    res.json(summarize(tx, from, to));
   });
   app.get('/api/advisor', async (req, res) => {
     const tx = await store.allTx(u(req).id);
-    const latest = tx.length ? tx[tx.length - 1].date : new Date().toISOString().slice(0, 10);
-    res.json(advise(tx, +(req.query.days || 365), latest));
+    const goals = await store.listGoals(u(req).id);
+    const { from, to } = rangeWindow(req.query, new Date().toISOString().slice(0, 10), 365);
+    res.json(buildAdvisor(tx, goals, from, to));
   });
 
   // ---- accounts (INC-2) ----
@@ -246,16 +304,89 @@ export async function buildApp(store: Store) {
     res.json({ items: await store.listItems(u(req).id), accounts: await store.listAccounts(u(req).id) });
   });
 
+  // ---- debt payoff planner: profit-driven plan over linked loan/credit accounts ----
+  app.get('/api/debt', async (req, res) => {
+    const extra = req.query.extra != null ? Math.max(0, Math.min(1e7, +req.query.extra || 0)) : undefined;
+    const accts = await store.listAccounts(u(req).id);
+    const tx = await store.allTx(u(req).id);
+    res.json(buildDebtPlan(accts, tx, extra));
+  });
+
   // ---- subscription tracker: detect recurring charges from transactions ----
   app.get('/api/recurring', async (req, res) => {
     res.json(detectRecurring(await store.allTx(u(req).id)));
   });
 
-  // ---- reports: arbitrary day range (e.g. ?days=30), generated on the spot ----
+  // A linked credit/loan account is a debt to pay DOWN, not money saved.
+  const isLiabilityType = (t?: string) => /credit|loan|mortgage|student|line of credit/i.test(t || '');
+
+  // ---- savings & debt-payoff goals: on-pace projection from net cash flow ----
+  app.get('/api/goals', async (req, res) => {
+    const goals = await store.listGoals(u(req).id);
+    const accts = await store.listAccounts(u(req).id);
+    const acctById = Object.fromEntries(accts.map(a => [a.id, a]));
+    // Linked goals auto-sync from the account's live balance.
+    // savings: saved = balance. payoff: saved = how much of the debt is paid down (start - current).
+    for (const g of goals) if (g.account_id && acctById[g.account_id]) {
+      const bal = Math.max(0, acctById[g.account_id].current_balance || 0);
+      g.saved_amount = g.kind === 'payoff' && g.start_balance != null ? Math.max(0, g.start_balance - bal) : bal;
+    }
+    const out = projectGoals(goals, await store.allTx(u(req).id));
+    out.goals = out.goals.map(gv => ({
+      ...gv,
+      account: gv.account_id && acctById[gv.account_id]
+        ? { id: gv.account_id, name: acctById[gv.account_id].name, mask: acctById[gv.account_id].mask }
+        : null
+    }));
+    res.json(out);
+  });
+  app.post('/api/goals', async (req, res) => {
+    const v = parse(schemas.goalCreate, req.body);
+    if (!v.ok) return res.status(400).json({ error: v.error });
+    // Derive the goal kind from the linked account (server is authoritative).
+    let kind: 'savings' | 'payoff' = 'savings';
+    let start_balance: number | null = null;
+    let target = v.data.target_amount;
+    let saved = v.data.saved_amount ?? 0;
+    if (v.data.account_id) {
+      const acct = (await store.listAccounts(u(req).id)).find(a => a.id === v.data.account_id);
+      if (acct && isLiabilityType(acct.type)) {
+        kind = 'payoff';
+        start_balance = Math.max(0, acct.current_balance || 0);
+        target = start_balance; // paying the whole balance off
+        saved = 0;              // computed live from the balance
+      }
+    }
+    const g = await store.createGoal({
+      user_id: u(req).id, name: v.data.name, target_amount: target,
+      saved_amount: saved, target_date: v.data.target_date ?? null,
+      color: v.data.color ?? '#7c3aed', account_id: v.data.account_id ?? null,
+      kind, start_balance
+    });
+    await store.audit(u(req).id, 'goal_created', g.name, ipHash(req));
+    res.json(g);
+  });
+  app.patch('/api/goals/:id', async (req, res) => {
+    const v = parse(schemas.goalUpdate, req.body);
+    if (!v.ok) return res.status(400).json({ error: v.error });
+    const g = await store.updateGoal(u(req).id, req.params.id, v.data);
+    if (!g) return res.status(404).json({ error: 'goal not found' });
+    res.json(g);
+  });
+  app.delete('/api/goals/:id', async (req, res) => {
+    if (!(await store.deleteGoal(u(req).id, req.params.id))) return res.status(404).json({ error: 'goal not found' });
+    res.json({ deleted: true });
+  });
+
+  // ---- reports: a calendar month (?from=&to=, like the rest of the app), or an
+  // arbitrary day range (?days=30) as a fallback, generated on the spot ----
   app.get('/api/reports', async (req, res) => {
+    const tx = await store.allTx(u(req).id);
+    const to = typeof req.query.to === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.to) ? req.query.to : '';
+    const month = typeof req.query.month === 'string' && /^\d{4}-\d{2}$/.test(req.query.month) ? req.query.month : (to ? to.slice(0, 7) : '');
+    if (month) return res.json(buildMonthReport(tx, month));
     const v = parse(schemas.reportRange, req.query);
     if (!v.ok) return res.status(400).json({ error: v.error });
-    const tx = await store.allTx(u(req).id);
     res.json(buildRangeReport(tx, v.data.days || 30, v.data.offset || 0));
   });
   // ---- reports: named cadences (weekly | monthly | six_month | year_in_review) ----
@@ -269,13 +400,15 @@ export async function buildApp(store: Store) {
   });
 
   // ---- Plaid (F3, P1-P5) ----
-  // SEC-1: tight per-user limit — bank linking is rare, abuse is not.
-  const linkLimiter = rateLimit({ windowMs: 60_000, max: 5, keyGenerator: (req) => (req as never as { user?: User }).user?.id || req.ip || 'anon' });
+  // SEC-1: per-user limit on bank linking (rare action, but abuse is not). Kept
+  // generous enough that normal retries during setup don't trip it.
+  const linkLimiter = rateLimit({ windowMs: 60_000, max: 20, keyGenerator: (req) => (req as never as { user?: User }).user?.id || req.ip || 'anon' });
   app.post('/api/plaid/link-token', linkLimiter, async (req, res) => {
     const limit = PLAN_LIMITS[u(req).plan]?.items ?? 0;
     if (await store.countItems(u(req).id) >= limit)
-      return res.status(402).json({ error: `plan "${u(req).plan}" allows ${limit} bank connection(s) — upgrade to add more`, upgrade: true });
-    res.json(await Plaid.createLinkToken(u(req).id));
+      return res.status(402).json({ error: `plan "${u(req).plan}" allows ${limit} bank connection(s), upgrade to add more`, upgrade: true });
+    try { res.json(await Plaid.createLinkToken(u(req).id)); }
+    catch (e) { console.error('plaid link-token error:', (e as Error).message); res.status(502).json({ error: 'Could not start bank linking: ' + (e as Error).message }); }
   });
   app.post('/api/plaid/exchange', linkLimiter, async (req, res) => {
     const v = parse(schemas.plaidExchange, req.body); // I3
@@ -284,20 +417,32 @@ export async function buildApp(store: Store) {
     const limit = PLAN_LIMITS[u(req).plan]?.items ?? 0;
     if (await store.countItems(u(req).id) >= limit)
       return res.status(402).json({ error: 'plan limit reached', upgrade: true });
-    const ex = await Plaid.exchangePublicToken(public_token);
+    let ex;
+    try {
+      ex = await Plaid.exchangePublicToken(public_token);
+    } catch (e) {
+      console.error('plaid exchange error:', (e as Error).message);
+      return res.status(502).json({ error: 'Bank link failed at token exchange: ' + (e as Error).message });
+    }
     const item = await store.addItem({
       user_id: u(req).id, plaid_item_id: ex.item_id, institution_name: ex.institution,
       access_token_ciphertext: encryptToken(ex.access_token), sync_cursor: null, status: 'healthy'
     });
-    const n = await runItemSync(store, u(req).id, item.id, ex.access_token, null);
+    // The bank is linked once the token is exchanged. An initial-sync hiccup
+    // (e.g. PRODUCT_NOT_READY in sandbox) must NOT fail the link; it syncs later.
+    let imported = 0, syncWarning: string | undefined;
+    try { imported = await runItemSync(store, u(req).id, item.id, ex.access_token, null); }
+    catch (e) { syncWarning = (e as Error).message; console.error('initial sync deferred:', syncWarning); }
     await store.audit(u(req).id, 'plaid_link', ex.institution, ipHash(req));
-    res.json({ item: { id: item.id, institution: ex.institution }, imported: n });
+    res.json({ item: { id: item.id, institution: ex.institution }, imported, syncWarning });
   });
   app.post('/api/plaid/sync', async (req, res) => {
-    let total = 0;
-    for (const it of await store.listItems(u(req).id))
-      total += await runItemSync(store, u(req).id, it.id, decrypt(it.access_token_ciphertext), it.sync_cursor);
-    res.json({ imported: total });
+    try {
+      let total = 0;
+      for (const it of await store.listItems(u(req).id))
+        total += await runItemSync(store, u(req).id, it.id, decrypt(it.access_token_ciphertext), it.sync_cursor);
+      res.json({ imported: total });
+    } catch (e) { console.error('plaid sync error:', (e as Error).message); res.status(502).json({ error: 'Sync failed: ' + (e as Error).message }); }
   });
   app.delete('/api/plaid/items/:id', async (req, res) => {
     const it = (await store.listItems(u(req).id)).find(i => i.id === req.params.id);
@@ -313,16 +458,29 @@ export async function buildApp(store: Store) {
     const v = parse(schemas.checkout, req.body); // I3
     if (!v.ok) return res.status(400).json({ error: v.error });
     const { plan } = v.data;
-    const out = await Billing.createCheckout(u(req).id, u(req).email, plan);
-    if (out.mock) {
-      await store.setPlan(u(req).id, plan, 'cus_mock_' + u(req).id.slice(0, 8));
-      await store.upsertSubscription({ user_id: u(req).id, stripe_subscription_id: 'sub_mock', plan, status: 'active', current_period_end: null });
-    }
-    res.json(out);
+    try {
+      const out = await Billing.createCheckout(u(req).id, u(req).email, plan);
+      if (out.mock) {
+        await store.setPlan(u(req).id, plan, 'cus_mock_' + u(req).id.slice(0, 8));
+        await store.upsertSubscription({ user_id: u(req).id, stripe_subscription_id: 'sub_mock', plan, status: 'active', current_period_end: null });
+      }
+      res.json(out);
+    } catch (e) { console.error('checkout error:', (e as Error).message); res.status(502).json({ error: 'Could not start checkout, please try again.' }); }
   });
   app.post('/api/billing/portal', async (req, res) => {
     if (!u(req).stripe_customer_id) return res.status(400).json({ error: 'no billing on file' });
-    res.json(await Billing.createPortal(u(req).stripe_customer_id!));
+    try { res.json(await Billing.createPortal(u(req).stripe_customer_id!)); }
+    catch (e) { console.error('portal error:', (e as Error).message); res.status(502).json({ error: 'Could not open the billing portal, please try again.' }); }
+  });
+
+  // Unmatched API routes return JSON (not an HTML 404 the client can't parse).
+  app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));
+  // Final safety net: any thrown/forwarded error becomes a JSON 500 instead of an
+  // empty or HTML body (which the client saw as "Unexpected end of JSON input").
+  app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    console.error('route error:', err?.message);
+    if (res.headersSent) return;
+    res.status(500).json({ error: err?.message || 'server error' });
   });
 
   return app;
@@ -336,6 +494,12 @@ if (isMain) {
     for (const p of problems) console.error('FATAL config:', p);
     process.exit(1);
   }
+  // Keep the server alive: a single failed request (e.g. a Plaid/Stripe call that
+  // throws) must never crash the whole process. Node terminates on unhandled
+  // rejections by default; log and continue instead.
+  process.on('unhandledRejection', (reason) => console.error('unhandledRejection:', reason instanceof Error ? reason.message : reason));
+  process.on('uncaughtException', (err) => console.error('uncaughtException:', err?.message || err));
+
   const store = await makeStore();
   const app = await buildApp(store);
   app.listen(cfg.port, () => console.log(`Osborn Finance API on :${cfg.port} (auth=${cfg.authMode}, plaid=${cfg.plaid.mock ? 'mock' : cfg.plaid.env}, stripe=${cfg.stripe.mock ? 'mock' : 'live'})`));

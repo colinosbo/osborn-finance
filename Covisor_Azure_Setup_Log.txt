@@ -1,0 +1,69 @@
+===============================================================================
+COVISOR, AZURE SETUP LOG
+A running record of every resource we create, with exact names and settings.
+Updated step by step as each one is confirmed done.
+Started: June 2026
+===============================================================================
+
+IMPORTANT
+  - This file records NAMES, TAGS, REGIONS, and CONFIG CHOICES only.
+  - It does NOT store secrets, passwords, connection strings, or keys.
+    Those live only in the Container Apps secret store (or Key Vault).
+
+
+-------------------------------------------------------------------------------
+GLOBAL CONVENTIONS
+-------------------------------------------------------------------------------
+  App name:        covisor
+  Environment:     prod (a separate dev environment can mirror this later)
+  Region:          <CONFIRM, the region you chose when creating the RG>
+                   (every resource below must use this same region)
+
+  Standard tags (apply to every resource):
+     app   = covisor
+     env   = prod
+     owner = colin
+
+  Planned resource names (prod):
+     Resource group .............. rg-covisor-prod
+     Log Analytics workspace ..... log-covisor-prod
+     Container Apps environment .. cae-covisor-prod
+     Container App (API) ......... ca-covisor-api-prod
+     PostgreSQL Flexible Server .. pg-covisor-prod
+     Static Web App .............. swa-covisor-prod
+     Key Vault (optional) ........ kv-covisor-prod
+
+
+-------------------------------------------------------------------------------
+PROGRESS LOG
+-------------------------------------------------------------------------------
+
+[DONE] Step 1, Resource group
+     Name:    rg-covisor-prod
+     Region:  <CONFIRM>
+     Tags:    app=covisor, env=prod, owner=colin
+
+[PENDING] Step 2, Log Analytics workspace (log-covisor-prod)
+[PENDING] Step 3, Container Apps environment (cae-covisor-prod)
+[PENDING] Step 4, PostgreSQL Flexible Server (pg-covisor-prod)
+[PENDING] Step 5, Secrets in the Container App
+[PENDING] Step 6, GitHub Container Registry pull access
+[PENDING] Step 7, Container App / API (ca-covisor-api-prod)
+[PENDING] Step 8, Static Web App (swa-covisor-prod)
+[PENDING] Step 9, Alerts + budget
+
+
+-------------------------------------------------------------------------------
+VALUES TO FILL IN AS WE GO
+-------------------------------------------------------------------------------
+  Region (locked) .................. <CONFIRM>
+  API ingress port ................. <set at Step 7>
+  API public URL ................... <Container App FQDN, from Step 7>
+  Frontend custom domain ........... <set at Step 8>
+  PostgreSQL server host ........... <pg-covisor-prod.postgres.database.azure.com>
+  PostgreSQL app role name ......... osborn app role: covisorapp (created Step 4)
+  Container Apps egress IP(s) ...... <record at Step 3/7, for the PG firewall>
+
+===============================================================================
+END OF LOG
+===============================================================================

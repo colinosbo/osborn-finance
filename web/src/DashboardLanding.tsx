@@ -15,6 +15,26 @@ const STEPS: { n: string; title: string; text: string }[] = [
   { n: '3', title: 'Unlock everything', text: 'Dashboards, reports, subscription tracking, and savings insights, all kept up to date for you.' }
 ];
 
+// Factual capability stats, no invented user counts or testimonials.
+const STATS: { big: string; label: string }[] = [
+  { big: '25+', label: 'spending categories sorted automatically' },
+  { big: 'Encrypted', label: 'end to end, in transit and at rest' },
+  { big: '11,000+', label: 'banks supported through Plaid' },
+  { big: '7 days', label: 'free on every plan, no charge upfront' }
+];
+
+// Honest comparison vs the usual alternatives.
+const CMP_ROWS: { label: string; cells: (boolean | string)[] }[] = [
+  { label: 'Updates itself automatically', cells: [false, true, true] },
+  { label: 'Every account in one place', cells: [false, false, true] },
+  { label: 'Auto-categorized spending', cells: [false, true, true] },
+  { label: 'Finds recurring subscriptions', cells: [false, false, true] },
+  { label: 'Flags when a bill goes up', cells: [false, false, true] },
+  { label: 'Savings goals with projections', cells: ['Manual', false, true] },
+  { label: 'Exportable reports & PDFs', cells: ['Manual', false, true] }
+];
+const CMP_HEADS = ['Spreadsheet', "Your bank's app", 'Osborn Finance'];
+
 export default function DashboardLanding() {
   const root = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -92,6 +112,16 @@ export default function DashboardLanding() {
         ))}
       </section>
 
+      {/* Capability stats / credibility */}
+      <section className="land-stats reveal">
+        {STATS.map(s => (
+          <div className="land-stat" key={s.label}>
+            <div className="land-stat-big grad">{s.big}</div>
+            <div className="land-stat-label">{s.label}</div>
+          </div>
+        ))}
+      </section>
+
       {/* How it works */}
       <section className="land-how reveal">
         <div className="land-how-head">
@@ -140,6 +170,47 @@ export default function DashboardLanding() {
             <div className="land-sec-item-title">Your card stays private</div>
             <div className="land-sec-item-text">Payments are processed by Stripe. Your card number never touches our servers, only your bank and Stripe see it.</div>
           </div>
+        </div>
+      </section>
+
+      {/* Comparison vs alternatives */}
+      <section className="land-compare reveal">
+        <div className="land-how-head">
+          <div className="land-eyebrow">Why switch</div>
+          <h2 className="land-h2">More than a spreadsheet or a bank app</h2>
+        </div>
+        <div className="lc-scroll">
+          <table className="lc-table">
+            <thead>
+              <tr>
+                <th></th>
+                {CMP_HEADS.map((h, i) => <th key={h} className={i === 2 ? 'lc-us' : ''}>{h}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {CMP_ROWS.map(row => (
+                <tr key={row.label}>
+                  <td className="lc-label">{row.label}</td>
+                  {row.cells.map((c, i) => (
+                    <td key={i} className={'lc-cell' + (i === 2 ? ' lc-us' : '')}>
+                      {c === true ? <span className="lc-yes">✓</span>
+                        : c === false ? <span className="lc-no">-</span>
+                        : <span className="lc-part">{c}</span>}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {/* Final CTA + share */}
+      <section className="land-final reveal">
+        <h2 className="land-final-title">Ready to see where your money goes?</h2>
+        <p className="land-final-sub">Start a 7-day free trial, connect a bank in seconds, cancel anytime in two clicks.</p>
+        <div className="land-cta" style={{ justifyContent: 'center' }}>
+          <Link to="/plans" className="btn primary">View plans</Link>
         </div>
       </section>
 

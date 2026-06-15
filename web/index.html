@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Osborn Finance</title>
-  <script>document.documentElement.setAttribute('data-theme', localStorage.getItem('of_theme') || 'dark');</script>
+  <script>var t=localStorage.getItem('of_theme')||'gray';if(t==='dark')t='purple';if(t==='steel')t='gray';document.documentElement.setAttribute('data-theme',t);</script>
 </head>
 <body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body>
 </html>

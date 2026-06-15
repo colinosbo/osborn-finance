@@ -1,12 +1,12 @@
-// Plaid client — real sandbox/production when keys set, deterministic mock otherwise.
+// Plaid client: real sandbox/production when keys set, deterministic mock otherwise.
 import { cfg } from './config.js';
-import { classify, merchant, cleanDesc } from './classifier.js';
+import { classify, classifyFromPlaid, merchant, cleanDesc } from './classifier.js';
 import type { Store } from './store.js';
 import { encrypt } from './crypto.js';
 import { createHash } from 'crypto';
 import { jwtVerify, importJWK, decodeProtectedHeader, type JWK } from 'jose';
 
-interface PlaidTxn { transaction_id: string; date: string; name: string; amount: number; pending: boolean; }
+interface PlaidTxn { transaction_id: string; date: string; name: string; amount: number; pending: boolean; personal_finance_category?: { primary?: string; detailed?: string } | null; }
 
 async function plaidPost(path: string, body: Record<string, unknown>) {
   const res = await fetch(`https://${cfg.plaid.env}.plaid.com${path}`, {
@@ -14,7 +14,7 @@ async function plaidPost(path: string, body: Record<string, unknown>) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ client_id: cfg.plaid.clientId, secret: cfg.plaid.secret, ...body })
   });
-  // L1: do NOT fold the raw provider body into the error — it can echo request
+  // L1: do NOT fold the raw provider body into the error, it can echo request
   // data / identifiers that then land in logs. Surface status + a Plaid error code only.
   if (!res.ok) {
     let code = '';
@@ -40,7 +40,18 @@ export const Plaid = {
   async exchangePublicToken(publicToken: string) {
     if (cfg.plaid.mock) return { access_token: 'access-mock-' + publicToken, item_id: 'item-mock-' + Math.random().toString(36).slice(2, 10), institution: 'Mock Community Bank' };
     const j = await plaidPost('/item/public_token/exchange', { public_token: publicToken });
-    return { access_token: j.access_token, item_id: j.item_id, institution: 'Connected Bank' };
+    // Resolve the real institution name (Chase, Fidelity, ...) by looking up the
+    // item's institution_id. Wrapped so a lookup failure never blocks linking.
+    let institution = 'Connected Bank';
+    try {
+      const it = await plaidPost('/item/get', { access_token: j.access_token });
+      const instId = it.item?.institution_id;
+      if (instId) {
+        const inst = await plaidPost('/institutions/get_by_id', { institution_id: instId, country_codes: ['US'] });
+        institution = inst.institution?.name || institution;
+      }
+    } catch (e) { console.error('institution lookup failed:', (e as Error).message); }
+    return { access_token: j.access_token, item_id: j.item_id, institution };
   },
   async syncTransactions(accessToken: string, cursor: string | null): Promise<{ added: PlaidTxn[]; next_cursor: string }> {
     if (cfg.plaid.mock) {
@@ -56,8 +67,15 @@ export const Plaid = {
       }
       return { added, next_cursor: 'done' };
     }
-    const j = await plaidPost('/transactions/sync', { access_token: accessToken, cursor: cursor || undefined, count: 500 });
-    return { added: j.added, next_cursor: j.next_cursor }; // production: also handle j.modified / j.removed
+    try {
+      const j = await plaidPost('/transactions/sync', { access_token: accessToken, cursor: cursor || undefined, count: 500 });
+      return { added: j.added || [], next_cursor: j.next_cursor }; // production: also handle j.modified / j.removed
+    } catch (e) {
+      // Right after linking, sandbox/production often need a moment before
+      // transactions exist. Treat "not ready" as zero new txns, not a failure.
+      if ((e as Error).message.includes('PRODUCT_NOT_READY')) return { added: [], next_cursor: cursor || '' };
+      throw e;
+    }
   },
   async removeItem(accessToken: string) {
     if (cfg.plaid.mock) return;
@@ -66,9 +84,12 @@ export const Plaid = {
   // INC-2: pull account names + live balances alongside transactions.
   async getAccounts(accessToken: string): Promise<Array<{ account_id: string; name: string; mask: string; type: string; balance: number }>> {
     if (cfg.plaid.mock) {
+      // Mix of asset and liability accounts so net worth + the debt planner are demonstrable.
       return [
         { account_id: 'acc-mock-chk-' + accessToken.slice(-6), name: 'Everyday Checking', mask: '3131', type: 'checking', balance: 2483.12 },
-        { account_id: 'acc-mock-sav-' + accessToken.slice(-6), name: 'Kasasa Saver', mask: '4318', type: 'savings', balance: 5120.55 }
+        { account_id: 'acc-mock-sav-' + accessToken.slice(-6), name: 'Kasasa Saver', mask: '4318', type: 'savings', balance: 5120.55 },
+        { account_id: 'acc-mock-cc-' + accessToken.slice(-6), name: 'Rewards Credit Card', mask: '7782', type: 'credit', balance: 3450.18 },
+        { account_id: 'acc-mock-loan-' + accessToken.slice(-6), name: 'Auto Loan', mask: '2210', type: 'loan', balance: 14200.00 }
       ];
     }
     const j = await plaidPost('/accounts/balance/get', { access_token: accessToken });
@@ -102,23 +123,33 @@ export async function verifyPlaidWebhook(verificationJwt: string | undefined, ra
 }
 
 export async function runItemSync(store: Store, userId: string, itemDbId: string, accessToken: string, cursor: string | null) {
-  const overrides = await store.getOverrides(userId);
-  const { added, next_cursor } = await Plaid.syncTransactions(accessToken, cursor);
-  const rows = added.filter(t => !t.pending).map(t => {
-    const amount = -t.amount; // Plaid: positive = money out
-    const merch = merchant(t.name);
-    let category = classify(t.name, amount);
-    if (amount < 0 && overrides[merch]) category = overrides[merch];
-    return { user_id: userId, date: t.date, name: cleanDesc(t.name), merchant: merch, amount, balance: null, category, source: 'plaid', plaid_transaction_id: t.transaction_id, item_id: itemDbId };
-  });
-  await store.insertTx(rows);
-  await store.setCursor(itemDbId, next_cursor);
-  // INC-2: refresh account list + balances on every sync.
+  // Accounts + balances FIRST so they appear immediately, even if transactions
+  // aren't ready yet right after linking. (Previously transactions ran first and
+  // a not-ready error there meant accounts never synced.)
   const accts = await Plaid.getAccounts(accessToken);
   await store.upsertAccounts(accts.map(a => ({
     item_id: itemDbId, user_id: userId, plaid_account_id: a.account_id,
     name: a.name, mask: a.mask, type: a.type, current_balance: a.balance
   })));
+  // Transactions next (may legitimately be empty for a freshly linked item).
+  const overrides = await store.getOverrides(userId);
+  const { added, next_cursor } = await Plaid.syncTransactions(accessToken, cursor);
+  const rows = added.filter(t => !t.pending).map(t => {
+    const amount = -t.amount; // Plaid: positive = money out
+    const merch = merchant(t.name);
+    let category: string;
+    if (amount > 0) {
+      category = 'Income & Refunds';
+    } else {
+      // Prefer Plaid's own categorization; fall back to keyword rules (e.g. CSV-like names).
+      const fromPlaid = classifyFromPlaid(t.personal_finance_category);
+      category = fromPlaid && fromPlaid !== 'Income & Refunds' ? fromPlaid : classify(t.name, amount);
+      if (overrides[merch]) category = overrides[merch];
+    }
+    return { user_id: userId, date: t.date, name: cleanDesc(t.name), merchant: merch, amount, balance: null, category, source: 'plaid', plaid_transaction_id: t.transaction_id, item_id: itemDbId };
+  });
+  await store.insertTx(rows);
+  if (next_cursor) await store.setCursor(itemDbId, next_cursor);
   return rows.length;
 }
 

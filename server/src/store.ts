@@ -7,6 +7,8 @@ export interface Tx { id: string; user_id: string; date: string; name: string; m
 export interface Item { id: string; user_id: string; plaid_item_id: string; institution_name: string; access_token_ciphertext: string; sync_cursor: string | null; status: string; }
 export interface Account { id: string; item_id: string; user_id: string; plaid_account_id: string; name: string; mask: string; type: string; current_balance: number; }
 export interface Subscription { user_id: string; stripe_subscription_id: string | null; plan: string; status: string; current_period_end: string | null; }
+export interface Goal { id: string; user_id: string; name: string; target_amount: number; saved_amount: number; target_date: string | null; color: string; account_id: string | null; kind: 'savings' | 'payoff'; start_balance: number | null; created_at: string; }
+export type GoalPatch = Partial<Pick<Goal, 'name' | 'target_amount' | 'saved_amount' | 'target_date' | 'color' | 'account_id'>>;
 
 export interface Store {
   getOrCreateUser(email: string): Promise<User>;
@@ -14,10 +16,11 @@ export interface Store {
   setPlan(userId: string, plan: string, stripeCustomerId?: string): Promise<void>;
   deleteUser(userId: string): Promise<void>;
   insertTx(rows: Omit<Tx, 'id'>[]): Promise<number>;
-  listTx(userId: string, q: { from?: string; cat?: string; flow?: string; search?: string; limit: number; offset: number; sort: string; dir: string }): Promise<{ rows: Tx[]; total: number }>;
+  listTx(userId: string, q: { from?: string; to?: string; cat?: string; flow?: string; search?: string; limit: number; offset: number; sort: string; dir: string }): Promise<{ rows: Tx[]; total: number }>;
   allTx(userId: string, from?: string): Promise<Tx[]>;
   txKeys(userId: string): Promise<Set<string>>;
   setCategoryByMerchant(userId: string, merchant: string, category: string): Promise<number>;
+  setTxCategories(userId: string, updates: { id: string; category: string }[]): Promise<number>;
   getOverrides(userId: string): Promise<Record<string, string>>;
   setOverride(userId: string, merchantKey: string, category: string): Promise<void>;
   addItem(it: Omit<Item, 'id'>): Promise<Item>;
@@ -33,6 +36,10 @@ export interface Store {
   getSubscription(userId: string): Promise<Subscription | null>;
   userByStripeCustomer(customerId: string): Promise<User | null>;
   getOrCreateUserBySub(sub: string, email: string): Promise<User>;
+  listGoals(userId: string): Promise<Goal[]>;
+  createGoal(g: Omit<Goal, 'id' | 'created_at'>): Promise<Goal>;
+  updateGoal(userId: string, id: string, patch: GoalPatch): Promise<Goal | null>;
+  deleteGoal(userId: string, id: string): Promise<boolean>;
   audit(userId: string | null, event: string, detail?: string, ipHash?: string): Promise<void>;
 }
 
@@ -54,7 +61,7 @@ class MemStore implements Store {
   async setPlan(userId: string, plan: string, sc?: string) {
     const u = this.users.get(userId); if (u) { u.plan = plan; if (sc) u.stripe_customer_id = sc; }
   }
-  async deleteUser(userId: string) { this.users.delete(userId); this.tx.delete(userId); this.overrides.delete(userId); this.items.delete(userId); }
+  async deleteUser(userId: string) { this.users.delete(userId); this.tx.delete(userId); this.overrides.delete(userId); this.items.delete(userId); this.goals.delete(userId); }
   async insertTx(rows: Omit<Tx, 'id'>[]) {
     for (const r of rows) {
       const list = this.tx.get(r.user_id) || [];
@@ -68,8 +75,9 @@ class MemStore implements Store {
     if (from) rows = rows.filter(t => t.date > from);
     return [...rows].sort((a, b) => a.date < b.date ? -1 : 1);
   }
-  async listTx(userId: string, q: { from?: string; cat?: string; flow?: string; search?: string; limit: number; offset: number; sort: string; dir: string }) {
+  async listTx(userId: string, q: { from?: string; to?: string; cat?: string; flow?: string; search?: string; limit: number; offset: number; sort: string; dir: string }) {
     let rows = await this.allTx(userId, q.from);
+    if (q.to) rows = rows.filter(t => t.date <= q.to!);
     if (q.cat) rows = rows.filter(t => t.category === q.cat);
     if (q.flow === 'in') rows = rows.filter(t => t.amount > 0);
     if (q.flow === 'out') rows = rows.filter(t => t.amount < 0);
@@ -84,6 +92,13 @@ class MemStore implements Store {
   async setCategoryByMerchant(userId: string, merchant: string, category: string) {
     let n = 0;
     for (const t of this.tx.get(userId) || []) if (t.merchant === merchant && t.amount < 0) { t.category = category; n++; }
+    return n;
+  }
+  async setTxCategories(userId: string, updates: { id: string; category: string }[]) {
+    if (!updates.length) return 0;
+    const byId = new Map(updates.map(x => [x.id, x.category]));
+    let n = 0;
+    for (const t of this.tx.get(userId) || []) { const c = byId.get(t.id); if (c !== undefined && t.category !== c) { t.category = c; n++; } }
     return n;
   }
   async getOverrides(userId: string) { return this.overrides.get(userId) || {}; }
@@ -136,6 +151,25 @@ class MemStore implements Store {
     const u = await this.getOrCreateUser(email);
     (u as never as { entra_sub?: string }).entra_sub = sub;
     return u;
+  }
+  goals = new Map<string, Goal[]>();
+  async listGoals(userId: string) { return [...(this.goals.get(userId) || [])].sort((a, b) => a.created_at < b.created_at ? -1 : 1); }
+  async createGoal(g: Omit<Goal, 'id' | 'created_at'>) {
+    const goal: Goal = { ...g, id: randomUUID(), created_at: new Date().toISOString() };
+    const list = this.goals.get(g.user_id) || []; list.push(goal); this.goals.set(g.user_id, list);
+    return goal;
+  }
+  async updateGoal(userId: string, id: string, patch: GoalPatch) {
+    const goal = (this.goals.get(userId) || []).find(x => x.id === id);
+    if (!goal) return null;
+    Object.assign(goal, patch);
+    return goal;
+  }
+  async deleteGoal(userId: string, id: string) {
+    const list = this.goals.get(userId) || [];
+    const next = list.filter(x => x.id !== id);
+    this.goals.set(userId, next);
+    return next.length !== list.length;
   }
   async audit(user_id: string | null, event: string, detail?: string, ip_hash?: string) {
     this.auditLog.push({ user_id, event, detail, ip_hash, at: new Date().toISOString() });
@@ -204,10 +238,11 @@ class PgStore implements Store {
     const r = await this.q(`SELECT id,user_id,to_char(date,'YYYY-MM-DD') date,name,merchant,amount::float,balance::float,category,source FROM transactions WHERE user_id=$1 ${from ? 'AND date > $2' : ''} ORDER BY date`, from ? [u, from] : [u]);
     return r.rows;
   }
-  async listTx(u: string, q2: { from?: string; cat?: string; flow?: string; search?: string; limit: number; offset: number; sort: string; dir: string }) {
+  async listTx(u: string, q2: { from?: string; to?: string; cat?: string; flow?: string; search?: string; limit: number; offset: number; sort: string; dir: string }) {
     const sortCols: Record<string,string> = { date:'date', amount:'amount', name:'name', category:'category' };
     const conds = ['user_id=$1']; const vals: unknown[] = [u]; let i = 2;
     if (q2.from) { conds.push(`date > $${i++}`); vals.push(q2.from); }
+    if (q2.to) { conds.push(`date <= $${i++}`); vals.push(q2.to); }
     if (q2.cat) { conds.push(`category = $${i++}`); vals.push(q2.cat); }
     if (q2.flow === 'in') conds.push('amount > 0');
     if (q2.flow === 'out') conds.push('amount < 0');
@@ -224,6 +259,17 @@ class PgStore implements Store {
   async setCategoryByMerchant(u: string, m: string, c: string) {
     const r = await this.q(`UPDATE transactions SET category=$3 WHERE user_id=$1 AND merchant=$2 AND amount<0`, [u, m, c]);
     return r.rowCount || 0;
+  }
+  async setTxCategories(u: string, updates: { id: string; category: string }[]) {
+    if (!updates.length) return 0;
+    let n = 0; const CHUNK = 500;
+    for (let i = 0; i < updates.length; i += CHUNK) {
+      const chunk = updates.slice(i, i + CHUNK);
+      const vals: unknown[] = []; const tuples = chunk.map((x, j) => { const b = j * 2; vals.push(x.id, x.category); return `($${b + 1}::uuid,$${b + 2})`; });
+      const r = await this.q(`UPDATE transactions AS t SET category = v.cat FROM (VALUES ${tuples.join(',')}) AS v(id, cat) WHERE t.id = v.id AND t.user_id = $${vals.length + 1}`, [...vals, u]);
+      n += r.rowCount || 0;
+    }
+    return n;
   }
   async getOverrides(u: string) {
     const r = await this.q(`SELECT merchant_key,category FROM category_overrides WHERE user_id=$1`, [u]);
@@ -264,6 +310,27 @@ class PgStore implements Store {
     const u = await this.getOrCreateUser(email);
     await this.q(`UPDATE users SET entra_subject_id=$2 WHERE id=$1`, [u.id, sub]);
     return u;
+  }
+  async listGoals(u: string) {
+    return (await this.q(`SELECT id,user_id,name,target_amount::float,saved_amount::float,to_char(target_date,'YYYY-MM-DD') target_date,color,account_id,kind,start_balance::float,to_char(created_at,'YYYY-MM-DD"T"HH24:MI:SSZ') created_at FROM goals WHERE user_id=$1 ORDER BY created_at`, [u])).rows;
+  }
+  async createGoal(g: Omit<Goal, 'id' | 'created_at'>) {
+    return (await this.q(`INSERT INTO goals(user_id,name,target_amount,saved_amount,target_date,color,account_id,kind,start_balance) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
+                          RETURNING id,user_id,name,target_amount::float,saved_amount::float,to_char(target_date,'YYYY-MM-DD') target_date,color,account_id,kind,start_balance::float,to_char(created_at,'YYYY-MM-DD"T"HH24:MI:SSZ') created_at`,
+      [g.user_id, g.name, g.target_amount, g.saved_amount, g.target_date, g.color, g.account_id, g.kind, g.start_balance])).rows[0];
+  }
+  async updateGoal(u: string, id: string, patch: GoalPatch) {
+    const cols: string[] = []; const vals: unknown[] = [u, id]; let i = 3;
+    for (const k of ['name', 'target_amount', 'saved_amount', 'target_date', 'color', 'account_id'] as const)
+      if (patch[k] !== undefined) { cols.push(`${k}=$${i++}`); vals.push(patch[k]); }
+    if (!cols.length) return (await this.listGoals(u)).find(x => x.id === id) || null;
+    const r = await this.q(`UPDATE goals SET ${cols.join(',')} WHERE user_id=$1 AND id=$2
+                            RETURNING id,user_id,name,target_amount::float,saved_amount::float,to_char(target_date,'YYYY-MM-DD') target_date,color,account_id,kind,start_balance::float,to_char(created_at,'YYYY-MM-DD"T"HH24:MI:SSZ') created_at`, vals);
+    return r.rows[0] || null;
+  }
+  async deleteGoal(u: string, id: string) {
+    const r = await this.q(`DELETE FROM goals WHERE user_id=$1 AND id=$2`, [u, id]);
+    return (r.rowCount || 0) > 0;
   }
   async audit(u: string | null, e: string, d?: string, ipHash?: string) { await this.q(`INSERT INTO audit_log(user_id,event,detail,ip_hash) VALUES($1,$2,$3,$4)`, [u, e, d || null, ipHash || null]); }
 }
