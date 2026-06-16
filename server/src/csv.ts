@@ -57,21 +57,34 @@ export function parseAmtStr(s: unknown): number | null {
   return isNaN(v) ? null : (neg ? -v : v);
 }
 
-export interface ColMap { headers: string[]; date: number; desc: number; amt: number; debit: number; credit: number; bal: number; }
+// Some banks export a single always-positive amount plus a separate word column
+// giving the direction ("Debit"/"Credit", "Withdrawal"/"Deposit"). Map that word
+// to a sign so debits import as expenses (negative) and credits as income.
+// Anchored to whole words: "ACH Debit" still reads as a debit, but a stray "Dr"
+// in an address or description never flips a sign.
+export function debitCreditSign(v: unknown): -1 | 0 | 1 {
+  const t = String(v ?? '').toLowerCase();
+  if (/\b(debit|withdrawal|withdraw)\b/.test(t)) return -1;
+  if (/\b(credit|deposit)\b/.test(t)) return 1;
+  return 0;
+}
+
+export interface ColMap { headers: string[]; date: number; desc: number; amt: number; debit: number; credit: number; bal: number; dir: number; }
 export function autoMap(rows: string[][]): ColMap {
   const headers = rows[0].map(h => String(h || '').trim());
   const data = rows.slice(1, 21);
-  const score = { date: [] as number[], desc: [] as number[], amt: [] as number[], bal: [] as number[], debit: [] as number[], credit: [] as number[] };
+  const score = { date: [] as number[], desc: [] as number[], amt: [] as number[], bal: [] as number[], debit: [] as number[], credit: [] as number[], dir: [] as number[] };
   for (let c = 0; c < headers.length; c++) {
     const h = headers[c].toLowerCase();
-    let dateS = 0, amtS = 0, descS = 0, balS = 0, debS = 0, credS = 0;
+    let dateS = 0, amtS = 0, descS = 0, balS = 0, debS = 0, credS = 0, dirS = 0;
     if (/date|posted/.test(h)) dateS += 3;
     if (/amount|\bamt\b/.test(h)) amtS += 3;
     if (/balance|running/.test(h)) balS += 4;
     if (/desc|memo|payee|detail|narrat|transaction\b|name/.test(h)) descS += 3;
     if (/debit|withdraw/.test(h)) debS += 4;
     if (/credit|deposit/.test(h) && !/card/.test(h)) credS += 4;
-    let dateHit = 0, numHit = 0, negHit = 0, lenSum = 0, filled = 0;
+    if (/\btype\b|debit.{0,3}credit|cr.?dr/.test(h)) dirS += 2;
+    let dateHit = 0, numHit = 0, negHit = 0, lenSum = 0, filled = 0, dirHit = 0;
     for (const r of data) {
       const v = r[c];
       if (v === undefined || String(v).trim() === '') continue;
@@ -79,6 +92,9 @@ export function autoMap(rows: string[][]): ColMap {
       if (parseDateStr(v)) dateHit++;
       const a = parseAmtStr(v);
       if (a !== null) { numHit++; if (a < 0) negHit++; }
+      // A direction column is one whose values are the words debit/credit/etc.
+      // (not numbers, not dates); that lets us sign a positive-only amount.
+      if (a === null && debitCreditSign(v) !== 0) dirHit++;
       lenSum += String(v).length;
     }
     if (filled) {
@@ -86,11 +102,12 @@ export function autoMap(rows: string[][]): ColMap {
       const nf = numHit / filled;
       amtS += nf * 2 + (negHit > 0 ? 1.5 : 0);
       balS += nf * 1.5; debS += nf; credS += nf;
+      dirS += (dirHit / filled) * 5;
       if (dateHit / filled > .6) { amtS = 0; balS = 0; debS = 0; credS = 0; descS = 0; }
       descS += Math.min(3, lenSum / filled / 12);
     }
     score.date.push(dateS); score.desc.push(descS); score.amt.push(amtS);
-    score.bal.push(balS); score.debit.push(debS); score.credit.push(credS);
+    score.bal.push(balS); score.debit.push(debS); score.credit.push(credS); score.dir.push(dirS);
   }
   const best = (arr: number[], excl: number[], min: number) => {
     let bi = -1, bv = min;
@@ -99,12 +116,20 @@ export function autoMap(rows: string[][]): ColMap {
   };
   const date = best(score.date, [], 3);
   const bal = best(score.bal, [date], 3.5);
-  const amt = best(score.amt, [date, bal], 2);
-  const desc = best(score.desc, [date, bal, amt], 1);
+  // A direction column (>60% debit/credit words) means the amount is positive-only
+  // and the sign lives elsewhere; detect it before deciding how to read amounts.
+  const dir = best(score.dir, [date, bal], 3);
+  let amt = best(score.amt, [date, bal, dir], 2);
+  // With a direction column present the amount column can be all-positive, so it
+  // may not clear the usual threshold; recover the strongest numeric column.
+  if (amt < 0 && dir >= 0) amt = best(score.amt, [date, bal, dir], 1);
+  const desc = best(score.desc, [date, bal, amt, dir], 1);
   let debit = -1, credit = -1;
-  if (amt < 0) {
+  // Only look for separate debit/credit AMOUNT columns when there's neither a
+  // single signed amount column nor a direction column to sign a positive amount.
+  if (amt < 0 && dir < 0) {
     debit = best(score.debit, [date, bal, desc], 3.5);
     credit = best(score.credit, [date, bal, desc, debit], 3.5);
   }
-  return { headers, date, desc, amt, debit, credit, bal };
+  return { headers, date, desc, amt, debit, credit, bal, dir };
 }

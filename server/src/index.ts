@@ -9,7 +9,7 @@ import { cfg, PLAN_LIMITS, assertSecureConfig } from './config.js';
 import { schemas, parse } from './validate.js';
 import { makeStore, type Store, type User } from './store.js';
 import { classify, merchant, cleanDesc, ALL_CATS } from './classifier.js';
-import { parseCSV, autoMap, parseDateStr, parseAmtStr } from './csv.js';
+import { parseCSV, autoMap, parseDateStr, parseAmtStr, debitCreditSign } from './csv.js';
 import { summarize } from './analytics.js';
 import { buildAdvisor } from './advisor.js';
 import { Plaid, runItemSync, encryptToken, verifyPlaidWebhook } from './plaid.js';
@@ -207,8 +207,15 @@ export async function buildApp(store: Store) {
       const r = rows[i];
       const date = parseDateStr(r[map.date]);
       let amt: number | null = null;
-      if (map.amt >= 0) amt = parseAmtStr(r[map.amt]);
-      else {
+      if (map.amt >= 0) {
+        amt = parseAmtStr(r[map.amt]);
+        // Banks that export a positive-only amount carry the sign in a separate
+        // Debit/Credit column: debit = expense (negative), credit = income.
+        if (amt !== null && map.dir >= 0) {
+          const sign = debitCreditSign(r[map.dir]);
+          if (sign) amt = sign * Math.abs(amt);
+        }
+      } else {
         const d = map.debit >= 0 ? parseAmtStr(r[map.debit]) : null;
         const c = map.credit >= 0 ? parseAmtStr(r[map.credit]) : null;
         if (d) amt = -Math.abs(d); else if (c) amt = Math.abs(c);
