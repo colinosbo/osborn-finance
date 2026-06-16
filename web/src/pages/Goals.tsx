@@ -370,7 +370,7 @@ export default function Goals({ toast }: { toast: Toast }) {
           <div className="panel goal-empty">
             <div className="goal-empty-ico">🎯</div>
             <div className="goal-empty-title">Start your first savings goal</div>
-            <div className="goal-empty-sub">Tell us a target and Osborn Finance tracks your progress, then projects when you'll get there from your real cash flow. Tap a starter to begin, or build your own.</div>
+            <div className="goal-empty-sub">Tell us a target and Covisor tracks your progress, then projects when you'll get there from your real cash flow. Tap a starter to begin, or build your own.</div>
             <div className="goal-starters">
               {PRESETS.map(p => (
                 <button key={p.name} type="button" className="goal-starter" onClick={() => startPreset(p)} style={{ borderTopColor: p.color }}>

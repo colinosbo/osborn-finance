@@ -1,4 +1,4 @@
-import { Routes, Route, NavLink, Link } from 'react-router-dom';
+import { Routes, Route, NavLink, Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import Dashboard from './pages/Dashboard';
 import Accounts from './pages/Accounts';
@@ -11,6 +11,10 @@ import Plans from './pages/Plans';
 import Settings from './pages/Settings';
 import Profile from './pages/Profile';
 import Subscriptions from './pages/Subscriptions';
+import DemoRequest from './pages/DemoRequest';
+import SignIn from './pages/SignIn';
+import SignUp from './pages/SignUp';
+import { isSignedIn, signOut, useAuth } from './auth';
 import { applyMotionPref } from './prefs';
 import { Icon, type IconName } from './icons';
 
@@ -21,7 +25,6 @@ const TABS: { to: string; ico: IconName; label: string }[] = [
   { to: '/accounts', ico: 'bank', label: 'Accounts' },
   { to: '/ledger', ico: 'ledger', label: 'Ledger' },
   { to: '/advisor', ico: 'advisor', label: 'Advisor' },
-  { to: '/budgets', ico: 'budgets', label: 'Budgets' },
   { to: '/goals', ico: 'goal', label: 'Goals' },
   { to: '/reports', ico: 'reports', label: 'Reports' },
   { to: '/subscriptions', ico: 'subscriptions', label: 'Subscriptions' },
@@ -30,9 +33,46 @@ const TABS: { to: string; ico: IconName; label: string }[] = [
 // Drawer (mobile only) shows the same destinations plus Profile & Settings.
 const DRAWER_LINKS: { to: string; ico: IconName; label: string }[] = [
   ...TABS,
+  { to: '/demo', ico: 'calendar', label: 'Book a demo' },
   { to: '/profile', ico: 'profile', label: 'Profile' },
   { to: '/settings', ico: 'settings', label: 'Settings' }
 ];
+
+// Gate a route behind auth (stub auth for now). Defaults to /signin — which links to
+// "Create an account" — with a next= return path. Pass to="signup" to land on sign-up.
+function RequireAuth({ to, children }: { to: 'signin' | 'signup'; children: JSX.Element }) {
+  const loc = useLocation();
+  if (!isSignedIn()) return <Navigate to={`/${to}?next=${encodeURIComponent(loc.pathname)}`} replace />;
+  return children;
+}
+
+// Nav sign-in/out control. Reflects the (stub) auth state and lets you reset the flow
+// while testing. Signing out returns to the dashboard.
+function AuthControl({ onNavigate }: { onNavigate?: () => void }) {
+  const { signedIn, name, email } = useAuth();
+  const nav = useNavigate();
+  const loc = useLocation();
+  if (signedIn) {
+    return (
+      <button
+        className="navtab authbtn"
+        title={`Signed in as ${name || email || 'your account'} — click to sign out`}
+        onClick={() => { signOut(); onNavigate?.(); nav('/'); }}
+      >
+        <span className="ico"><Icon name="profile" /></span>Sign out
+      </button>
+    );
+  }
+  return (
+    <NavLink
+      to={`/signin?next=${encodeURIComponent(loc.pathname)}`}
+      onClick={onNavigate}
+      className={({ isActive }) => 'navtab' + (isActive ? ' active' : '')}
+    >
+      <span className="ico"><Icon name="profile" /></span>Sign in
+    </NavLink>
+  );
+}
 
 export default function App() {
   const [toast, setToastMsg] = useState('');
@@ -60,7 +100,7 @@ export default function App() {
     <>
       <nav>
         <div className="nav-inner">
-          <Link to="/" className="brand" title="Home">Osborn <span className="grad">Finance</span></Link>
+          <Link to="/" className="brand" title="Home">Co<span className="grad">visor</span></Link>
           <div className="navtabs">
             {TABS.map(t => (
               <NavLink key={t.to} to={t.to} end={t.to === '/'} className={({ isActive }) => 'navtab' + (isActive ? ' active' : '')}>
@@ -69,12 +109,16 @@ export default function App() {
             ))}
           </div>
           <div className="navright">
+            <NavLink to="/demo" className={({ isActive }) => 'navtab demotab' + (isActive ? ' active' : '')}>
+              <span className="ico"><Icon name="calendar" /></span>Book a demo
+            </NavLink>
             <NavLink to="/profile" className={({ isActive }) => 'navtab' + (isActive ? ' active' : '')}>
               <span className="ico"><Icon name="profile" /></span>Profile
             </NavLink>
             <NavLink to="/settings" className={({ isActive }) => 'navtab' + (isActive ? ' active' : '')}>
               <span className="ico"><Icon name="settings" /></span>Settings
             </NavLink>
+            <AuthControl />
           </div>
           {/* mobile-only hamburger */}
           <button className="navburger" aria-label="Open menu" aria-expanded={menuOpen} onClick={() => setMenuOpen(true)}>
@@ -87,7 +131,7 @@ export default function App() {
       <div className={'drawer-scrim' + (menuOpen ? ' open' : '')} onClick={closeMenu} />
       <aside className={'drawer' + (menuOpen ? ' open' : '')} aria-hidden={!menuOpen}>
         <div className="drawer-head">
-          <Link to="/" className="brand drawer-brand" onClick={closeMenu}>Osborn <span className="grad">Finance</span></Link>
+          <Link to="/" className="brand drawer-brand" onClick={closeMenu}>Co<span className="grad">visor</span></Link>
           <button className="drawer-x" aria-label="Close menu" onClick={closeMenu}>✕</button>
         </div>
         <div className="drawer-links">
@@ -96,6 +140,7 @@ export default function App() {
               <span className="ico"><Icon name={t.ico} /></span>{t.label}
             </NavLink>
           ))}
+          <div className="drawer-link" style={{ padding: 0 }}><AuthControl onNavigate={closeMenu} /></div>
         </div>
       </aside>
       <div className="wrap">
@@ -108,9 +153,12 @@ export default function App() {
           <Route path="/goals" element={<Goals toast={showToast} />} />
           <Route path="/reports" element={<Reports toast={showToast} />} />
           <Route path="/subscriptions" element={<Subscriptions />} />
-          <Route path="/plans" element={<Plans toast={showToast} />} />
+          <Route path="/demo" element={<RequireAuth to="signin"><DemoRequest toast={showToast} /></RequireAuth>} />
+          <Route path="/plans" element={<RequireAuth to="signin"><Plans toast={showToast} /></RequireAuth>} />
           <Route path="/profile" element={<Profile toast={showToast} />} />
           <Route path="/settings" element={<Settings toast={showToast} theme={theme} setTheme={setTheme} />} />
+          <Route path="/signin" element={<SignIn />} />
+          <Route path="/signup" element={<SignUp />} />
         </Routes>
       </div>
       {toast && <div className="toastbox">{toast}</div>}

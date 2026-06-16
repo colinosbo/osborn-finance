@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { usePlaidLink } from 'react-plaid-link';
 import { api, fmt, fmt0, planLabel } from '../api';
+import { isSignedIn } from '../auth';
 import DebtPlan from '../DebtPlan';
 import type { Toast } from '../App';
 
@@ -52,6 +53,8 @@ export default function Accounts({ toast }: { toast: Toast }) {
     } catch (e) { toast('Error: ' + (e as Error).message); } finally { setBusy(false); }
   };
   const connect = async () => {
+    // Adding a bank requires an account: gate behind sign in / create account first.
+    if (!isSignedIn()) { navigate(`/signin?next=${encodeURIComponent('/accounts')}`); return; }
     // No plan yet (or plan limit reached): send them to pick a plan instead of erroring.
     if (plan === 'free') { navigate('/plans'); return; }
     try {

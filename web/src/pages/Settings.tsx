@@ -44,7 +44,7 @@ export default function Settings({ toast, theme, setTheme }: { toast: Toast; the
       <div className="sec-sub">Appearance, preferences, notifications, security &amp; billing</div>
 
       <div className="panel" style={{ marginBottom: 24 }}>
-        <h3>Appearance</h3><div className="psub">How Osborn Finance looks on this device</div>
+        <h3>Appearance</h3><div className="psub">How Covisor looks on this device</div>
         <div className="switchrow">
           <div className="lab"><b>Theme</b><span>Gray by default, or switch to White or Purple</span></div>
           <div className="themepick">

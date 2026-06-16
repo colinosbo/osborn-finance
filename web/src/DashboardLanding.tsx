@@ -33,7 +33,7 @@ const CMP_ROWS: { label: string; cells: (boolean | string)[] }[] = [
   { label: 'Savings goals with projections', cells: ['Manual', false, true] },
   { label: 'Exportable reports & PDFs', cells: ['Manual', false, true] }
 ];
-const CMP_HEADS = ['Spreadsheet', "Your bank's app", 'Osborn Finance'];
+const CMP_HEADS = ['Spreadsheet', "Your bank's app", 'Covisor'];
 
 export default function DashboardLanding() {
   const root = useRef<HTMLDivElement>(null);
@@ -59,9 +59,10 @@ export default function DashboardLanding() {
         <div className="land-hero-copy">
           <div className="land-eyebrow">Personal finance, automated</div>
           <h1 className="land-title">See every dollar.<br /><span className="grad">Across every account.</span></h1>
-          <p className="land-sub">Osborn Finance links your banks, auto-categorizes every transaction, and turns the mess into clear dashboards, reports, and subscription tracking, so you always know where your money goes.</p>
+          <p className="land-sub">Covisor links your banks, auto-categorizes every transaction, and turns the mess into clear dashboards, reports, and subscription tracking, so you always know where your money goes.</p>
           <div className="land-cta">
             <Link to="/plans" className="btn primary">View plans</Link>
+            <Link to="/demo" className="btn ghost">Book a demo</Link>
           </div>
           <div className="land-trust">
             <span><Icon name="repeat" size={14} /> Starts with a 7-day free trial</span>
@@ -211,10 +212,11 @@ export default function DashboardLanding() {
         <p className="land-final-sub">Start a 7-day free trial, connect a bank in seconds, cancel anytime in two clicks.</p>
         <div className="land-cta" style={{ justifyContent: 'center' }}>
           <Link to="/plans" className="btn primary">View plans</Link>
+          <Link to="/demo" className="btn ghost">Book a demo</Link>
         </div>
       </section>
 
-      <footer className="land-foot">Osborn Finance · Bank-level security · Built on Microsoft Azure · Your data, always yours</footer>
+      <footer className="land-foot">Covisor · Bank-level security · Built on Microsoft Azure · Your data, always yours</footer>
     </div>
   );
 }

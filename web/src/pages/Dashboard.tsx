@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, fmt, fmt0, color, planLabel } from '../api';
+import { api, fmt, fmt0, color, planLabel, donutData } from '../api';
 import DashboardLanding from '../DashboardLanding';
 import EmptyState from '../EmptyState';
 import RangePicker, { DEFAULT_RANGE, rangeQS, type RangeOpt } from '../RangePicker';
@@ -26,7 +26,7 @@ function ConnectPrompt({ plan, hasBank }: { plan: string; hasBank: boolean }) {
       title={hasBank ? 'Your bank is linked, transactions are on the way' : 'Connect your bank to see your money'}
       sub={hasBank
         ? "We're syncing your accounts. New transactions will appear here automatically. You can trigger a sync now, or import a CSV to get started immediately."
-        : 'Link your accounts securely through Plaid and Osborn Finance pulls in your transactions, auto-categorizes them, and builds your dashboard in seconds. Prefer a file? Import a CSV instead.'}
+        : 'Link your accounts securely through Plaid and Covisor pulls in your transactions, auto-categorizes them, and builds your dashboard in seconds. Prefer a file? Import a CSV instead.'}
       cta={{ to: '/accounts', label: hasBank ? 'Go to Accounts' : 'Connect a bank' }}
       secondary={{ to: '/accounts', label: 'Import CSV' }}
       hints={[
@@ -40,9 +40,7 @@ function ConnectPrompt({ plan, hasBank }: { plan: string; hasBank: boolean }) {
 
 // Spending-by-category donut (the circle graph used across the app).
 function Donut({ cats, total }: { cats: { name: string; total: number }[]; total: number }) {
-  const top = cats.slice(0, 9);
-  const rest = cats.slice(9).reduce((sm, c) => sm + c.total, 0);
-  const data = rest > 0 ? [...top, { name: 'Other', total: rest }] : top;
+  const data = donutData(cats, 9);
   const sum = data.reduce((sm, d) => sm + d.total, 0) || 1;
   const r = 56, sw = 24, circ = 2 * Math.PI * r; let acc = 0;
   return (

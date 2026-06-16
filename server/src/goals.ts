@@ -2,6 +2,7 @@
 // We never store computed fields — pace is derived at read time from the user's
 // recent net cash flow, so projections stay current as new transactions land.
 import type { Goal, Tx } from './store.js';
+import { isMovement } from './classifier.js';
 
 const DAY = 864e5;
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -15,7 +16,11 @@ export function monthlyNetCashFlow(tx: Tx[]): number {
   const spanDays = (Date.parse(latest) - Date.parse(earliest)) / DAY;
   const windowDays = Math.min(183, Math.max(30, Math.ceil(spanDays) || 30));
   const cutoff = shiftDays(latest, -windowDays);
-  const net = tx.filter(t => t.date > cutoff).reduce((s, t) => s + t.amount, 0);
+  // Net = income minus consumption. Money movement (debt payoff, transfers, saving)
+  // isn't consumption, so it's excluded; the result is the discretionary surplus
+  // realistically available to put toward goals or debt (and never a misleading
+  // negative caused by a one-time loan payoff).
+  const net = tx.filter(t => t.date > cutoff).reduce((s, t) => s + (t.amount < 0 && isMovement(t.category) ? 0 : t.amount), 0);
   return r2(net / Math.max(1, windowDays / 30.44));
 }
 

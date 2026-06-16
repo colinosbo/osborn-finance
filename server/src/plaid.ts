@@ -2,6 +2,7 @@
 import { cfg } from './config.js';
 import { classify, classifyFromPlaid, merchant, cleanDesc } from './classifier.js';
 import type { Store } from './store.js';
+import { captureSnapshots, seedMockHistory } from './snapshots.js';
 import { encrypt } from './crypto.js';
 import { createHash } from 'crypto';
 import { jwtVerify, importJWK, decodeProtectedHeader, type JWK } from 'jose';
@@ -29,7 +30,7 @@ export const Plaid = {
     if (cfg.plaid.mock) return { link_token: 'link-mock-' + userId.slice(0, 8), mock: true };
     const j = await plaidPost('/link/token/create', {
       user: { client_user_id: userId },
-      client_name: 'Osborn Finance',
+      client_name: 'Covisor',
       products: ['transactions'],
       country_codes: ['US'],
       language: 'en',
@@ -58,12 +59,20 @@ export const Plaid = {
       if (cursor === 'done') return { added: [], next_cursor: 'done' };
       const today = new Date();
       const added: PlaidTxn[] = [];
-      const names = ['STARBUCKS STORE 0882', 'WAL-MART SUPERCENTER', 'SHELL OIL 5744', 'NETFLIX.COM', 'CHIPOTLE 1187', 'ACME LOGISTICS INC PAYROLL DIRECT DEP'];
+      const names = ['STARBUCKS STORE 0882', 'WAL-MART SUPERCENTER', 'SHELL OIL 5744', 'TARGET 00078', 'CHIPOTLE 1187', 'ACME LOGISTICS INC PAYROLL DIRECT DEP'];
       for (let i = 0; i < 30; i++) {
         const d = new Date(today); d.setDate(d.getDate() - i * 3);
         const name = names[i % names.length];
         // Plaid convention: positive = outflow; we negate on import
         added.push({ transaction_id: 'mock-' + accessToken.slice(-6) + '-' + i, date: d.toISOString().slice(0, 10), name, amount: name.includes('PAYROLL') ? -1420 : +(5 + (i * 7.13) % 80).toFixed(2), pending: false });
+      }
+      // Clean monthly subscriptions (~30-day cadence, steady amount) so the
+      // recurring detector and the report's subscriptions section are demoable.
+      for (const [name, amt] of [['NETFLIX.COM', 15.49], ['SPOTIFY USA', 11.99], ['HULU 877-824-4858', 17.99]] as [string, number][]) {
+        for (let k = 0; k < 4; k++) {
+          const d = new Date(today); d.setDate(d.getDate() - k * 30);
+          added.push({ transaction_id: `mock-sub-${name.slice(0, 4)}-${k}`, date: d.toISOString().slice(0, 10), name, amount: amt, pending: false });
+        }
       }
       return { added, next_cursor: 'done' };
     }
@@ -89,7 +98,9 @@ export const Plaid = {
         { account_id: 'acc-mock-chk-' + accessToken.slice(-6), name: 'Everyday Checking', mask: '3131', type: 'checking', balance: 2483.12 },
         { account_id: 'acc-mock-sav-' + accessToken.slice(-6), name: 'Kasasa Saver', mask: '4318', type: 'savings', balance: 5120.55 },
         { account_id: 'acc-mock-cc-' + accessToken.slice(-6), name: 'Rewards Credit Card', mask: '7782', type: 'credit', balance: 3450.18 },
-        { account_id: 'acc-mock-loan-' + accessToken.slice(-6), name: 'Auto Loan', mask: '2210', type: 'loan', balance: 14200.00 }
+        { account_id: 'acc-mock-loan-' + accessToken.slice(-6), name: 'Auto Loan', mask: '2210', type: 'loan', balance: 14200.00 },
+        { account_id: 'acc-mock-inv-' + accessToken.slice(-6), name: 'Brokerage', mask: '9021', type: 'brokerage', balance: 18540.32 },
+        { account_id: 'acc-mock-ira-' + accessToken.slice(-6), name: 'Roth IRA', mask: '5567', type: 'ira', balance: 22310.00 }
       ];
     }
     const j = await plaidPost('/accounts/balance/get', { access_token: accessToken });
@@ -131,6 +142,11 @@ export async function runItemSync(store: Store, userId: string, itemDbId: string
     item_id: itemDbId, user_id: userId, plaid_account_id: a.account_id,
     name: a.name, mask: a.mask, type: a.type, current_balance: a.balance
   })));
+  // Opportunistic balance snapshot on every sync (free, idempotent per day). This
+  // feeds the Investments change-in-value calc. seedMockHistory is mock-only.
+  const myAccts = (await store.listAccounts(userId)).filter(a => a.item_id === itemDbId);
+  await seedMockHistory(store, userId, myAccts);
+  await captureSnapshots(store, userId, myAccts);
   // Transactions next (may legitimately be empty for a freshly linked item).
   const overrides = await store.getOverrides(userId);
   const { added, next_cursor } = await Plaid.syncTransactions(accessToken, cursor);

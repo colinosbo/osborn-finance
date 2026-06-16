@@ -6,6 +6,8 @@ export interface User { id: string; email: string; display_name: string | null; 
 export interface Tx { id: string; user_id: string; date: string; name: string; merchant: string; amount: number; balance: number | null; category: string; source: string; plaid_transaction_id?: string | null; item_id?: string | null; }
 export interface Item { id: string; user_id: string; plaid_item_id: string; institution_name: string; access_token_ciphertext: string; sync_cursor: string | null; status: string; }
 export interface Account { id: string; item_id: string; user_id: string; plaid_account_id: string; name: string; mask: string; type: string; current_balance: number; }
+// Investment tracking: a point-in-time balance for one account (see migration 007).
+export interface Snapshot { account_id: string; user_id: string; date: string; balance: number; }
 export interface Subscription { user_id: string; stripe_subscription_id: string | null; plan: string; status: string; current_period_end: string | null; }
 export interface Goal { id: string; user_id: string; name: string; target_amount: number; saved_amount: number; target_date: string | null; color: string; account_id: string | null; kind: 'savings' | 'payoff'; start_balance: number | null; created_at: string; }
 export type GoalPatch = Partial<Pick<Goal, 'name' | 'target_amount' | 'saved_amount' | 'target_date' | 'color' | 'account_id'>>;
@@ -18,7 +20,10 @@ export interface Store {
   insertTx(rows: Omit<Tx, 'id'>[]): Promise<number>;
   listTx(userId: string, q: { from?: string; to?: string; cat?: string; flow?: string; search?: string; limit: number; offset: number; sort: string; dir: string }): Promise<{ rows: Tx[]; total: number }>;
   allTx(userId: string, from?: string): Promise<Tx[]>;
-  txKeys(userId: string): Promise<Set<string>>;
+  // Count of existing transactions per dedup key (`date|amount|name`), used for
+  // count-aware CSV import: a re-imported row is skipped only up to the number
+  // that already exist, so legitimate same-day repeats still import.
+  txCounts(userId: string): Promise<Map<string, number>>;
   setCategoryByMerchant(userId: string, merchant: string, category: string): Promise<number>;
   setTxCategories(userId: string, updates: { id: string; category: string }[]): Promise<number>;
   getOverrides(userId: string): Promise<Record<string, string>>;
@@ -32,6 +37,9 @@ export interface Store {
   itemByPlaidId(plaidItemId: string): Promise<Item | null>;
   upsertAccounts(rows: Omit<Account, 'id'>[]): Promise<void>;
   listAccounts(userId: string): Promise<Account[]>;
+  allItems(): Promise<Item[]>;
+  recordSnapshots(rows: Snapshot[]): Promise<void>;
+  listSnapshots(userId: string, accountIds: string[]): Promise<Snapshot[]>;
   upsertSubscription(sub: Subscription): Promise<void>;
   getSubscription(userId: string): Promise<Subscription | null>;
   userByStripeCustomer(customerId: string): Promise<User | null>;
@@ -82,12 +90,24 @@ class MemStore implements Store {
     if (q.flow === 'in') rows = rows.filter(t => t.amount > 0);
     if (q.flow === 'out') rows = rows.filter(t => t.amount < 0);
     if (q.search) { const s = q.search.toLowerCase(); rows = rows.filter(t => t.name.toLowerCase().includes(s) || t.merchant.toLowerCase().includes(s)); }
-    const k = q.sort as keyof Tx, dir = q.dir === 'asc' ? 1 : -1;
-    rows.sort((a, b) => ((a[k] ?? '') < (b[k] ?? '') ? -1 : 1) * dir);
+    const dir = q.dir === 'asc' ? 1 : -1;
+    if (q.sort === 'amount') {
+      // Sort by transaction size (magnitude), so descending puts the biggest
+      // transaction at the top regardless of whether it's money in or out.
+      rows.sort((a, b) => (Math.abs(a.amount) - Math.abs(b.amount)) * dir);
+    } else {
+      const k = q.sort as keyof Tx;
+      rows.sort((a, b) => ((a[k] ?? '') < (b[k] ?? '') ? -1 : 1) * dir);
+    }
     return { rows: rows.slice(q.offset, q.offset + q.limit), total: rows.length };
   }
-  async txKeys(userId: string) {
-    return new Set((this.tx.get(userId) || []).map(t => `${t.date}|${t.amount}|${t.name}`));
+  async txCounts(userId: string) {
+    const m = new Map<string, number>();
+    for (const t of this.tx.get(userId) || []) {
+      const k = `${t.date}|${t.amount}|${t.name}`;
+      m.set(k, (m.get(k) || 0) + 1);
+    }
+    return m;
   }
   async setCategoryByMerchant(userId: string, merchant: string, category: string) {
     let n = 0;
@@ -139,6 +159,21 @@ class MemStore implements Store {
     }
   }
   async listAccounts(userId: string) { return this.accounts.get(userId) || []; }
+  async allItems() { return [...this.items.values()].flat(); }
+  snapshots = new Map<string, Snapshot[]>();
+  async recordSnapshots(rows: Snapshot[]) {
+    for (const r of rows) {
+      const list = this.snapshots.get(r.user_id) || [];
+      const ex = list.find(s => s.account_id === r.account_id && s.date === r.date);
+      if (ex) ex.balance = r.balance;            // idempotent per (account, day)
+      else list.push({ ...r });
+      this.snapshots.set(r.user_id, list);
+    }
+  }
+  async listSnapshots(userId: string, accountIds: string[]) {
+    const set = new Set(accountIds);
+    return (this.snapshots.get(userId) || []).filter(s => set.has(s.account_id)).sort((a, b) => a.date < b.date ? -1 : 1);
+  }
   subs = new Map<string, Subscription>();
   async upsertSubscription(sub: Subscription) { this.subs.set(sub.user_id, sub); }
   async getSubscription(userId: string) { return this.subs.get(userId) || null; }
@@ -206,14 +241,16 @@ class PgStore implements Store {
   async deleteUser(u: string) { await this.q(`DELETE FROM users WHERE id=$1`, [u]); }
   async insertTx(rows: Omit<Tx, 'id'>[]) {
     if (!rows.length) return 0;
-    // M6: batch multi-row INSERTs instead of one query per row. Rows split by
-    // dedupe strategy: plaid rows conflict on plaid_transaction_id; CSV rows
-    // (NULL plaid id) dedupe via the partial unique index idx_tx_csv_dedup (BUG-2).
+    // M6: batch multi-row INSERTs instead of one query per row. Plaid rows still
+    // dedupe on plaid_transaction_id. CSV rows are deduped count-aware in the import
+    // handler (see txCounts), so they insert plainly — the old idx_tx_csv_dedup
+    // unique index was dropped (migration 008) because it wrongly blocked
+    // legitimate same-day identical purchases.
     const plaidRows = rows.filter(r => r.plaid_transaction_id);
     const csvRows = rows.filter(r => !r.plaid_transaction_id);
     let n = 0;
     n += await this.insertTxBatch(plaidRows, 'ON CONFLICT(plaid_transaction_id) DO NOTHING');
-    n += await this.insertTxBatch(csvRows, 'ON CONFLICT(user_id, date, amount, name) WHERE plaid_transaction_id IS NULL DO NOTHING');
+    n += await this.insertTxBatch(csvRows, '');
     return n;
   }
   private async insertTxBatch(rows: Omit<Tx, 'id'>[], conflict: string) {
@@ -252,9 +289,9 @@ class PgStore implements Store {
     const rows = (await this.q(`SELECT id,user_id,to_char(date,'YYYY-MM-DD') date,name,merchant,amount::float,balance::float,category,source FROM transactions WHERE ${where} ORDER BY ${sortCols[q2.sort]||'date'} ${q2.dir==='asc'?'ASC':'DESC'} LIMIT $${i} OFFSET $${i+1}`, [...vals, q2.limit, q2.offset])).rows;
     return { rows, total };
   }
-  async txKeys(u: string) {
-    const r = await this.q(`SELECT to_char(date,'YYYY-MM-DD')||'|'||amount::float||'|'||name k FROM transactions WHERE user_id=$1`, [u]);
-    return new Set<string>(r.rows.map((x: { k: string }) => x.k));
+  async txCounts(u: string) {
+    const r = await this.q(`SELECT to_char(date,'YYYY-MM-DD')||'|'||amount::float||'|'||name k, count(*)::int c FROM transactions WHERE user_id=$1 GROUP BY 1`, [u]);
+    return new Map<string, number>(r.rows.map((x: { k: string; c: number }) => [x.k, x.c]));
   }
   async setCategoryByMerchant(u: string, m: string, c: string) {
     const r = await this.q(`UPDATE transactions SET category=$3 WHERE user_id=$1 AND merchant=$2 AND amount<0`, [u, m, c]);
@@ -297,6 +334,17 @@ class PgStore implements Store {
         [r.item_id, r.user_id, r.plaid_account_id, r.name, r.mask, r.type, r.current_balance]);
   }
   async listAccounts(u: string) { return (await this.q(`SELECT id,item_id,user_id,plaid_account_id,name,mask,type,current_balance::float FROM accounts WHERE user_id=$1`, [u])).rows; }
+  async allItems() { return (await this.q(`SELECT * FROM plaid_items`)).rows; }
+  async recordSnapshots(rows: Snapshot[]) {
+    for (const r of rows)
+      await this.q(`INSERT INTO account_balance_snapshots(account_id,user_id,date,balance) VALUES($1,$2,$3,$4)
+                    ON CONFLICT(account_id,date) DO UPDATE SET balance=EXCLUDED.balance, captured_at=now()`,
+        [r.account_id, r.user_id, r.date, r.balance]);
+  }
+  async listSnapshots(u: string, accountIds: string[]) {
+    if (!accountIds.length) return [];
+    return (await this.q(`SELECT account_id,user_id,to_char(date,'YYYY-MM-DD') date,balance::float FROM account_balance_snapshots WHERE user_id=$1 AND account_id = ANY($2::uuid[]) ORDER BY date`, [u, accountIds])).rows;
+  }
   async upsertSubscription(sub: Subscription) {
     await this.q(`INSERT INTO subscriptions(user_id,stripe_subscription_id,plan,status,current_period_end) VALUES($1,$2,$3,$4,$5)
                   ON CONFLICT(user_id) DO UPDATE SET stripe_subscription_id=$2, plan=$3, status=$4, current_period_end=$5`,

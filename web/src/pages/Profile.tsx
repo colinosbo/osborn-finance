@@ -116,7 +116,7 @@ export default function Profile({ toast }: { toast: Toast }) {
   const exportData = async () => {
     const data = await api('/api/me/export');
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'osborn-finance-export.json'; a.click();
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'covisor-export.json'; a.click();
     toast('Export downloaded');
   };
   const del = async () => {
@@ -136,7 +136,7 @@ export default function Profile({ toast }: { toast: Toast }) {
   const content = () => {
     switch (active) {
       case 'personal': return (
-        <Section title="Personal information" sub="Name and contact details shown across Osborn Finance.">
+        <Section title="Personal information" sub="Name and contact details shown across Covisor.">
           {!editing ? (<>
             <div className="kv"><span>Display name</span><b>{p.displayName || '—'}</b></div>
             <div className="kv"><span>Preferred name</span><b>{p.preferredName || '—'}</b></div>
@@ -173,7 +173,7 @@ export default function Profile({ toast }: { toast: Toast }) {
         </Section>
       );
       case 'password': return (
-        <Section title="Password" sub="Passwords are managed by Entra External ID — never stored by Osborn Finance.">
+        <Section title="Password" sub="Passwords are managed by Entra External ID — never stored by Covisor.">
           <div className="kv"><span>Last changed</span><b>{fmtDate(p.security.lastPasswordChange, df)}</b></div>
           <div className="callout">For your security, password changes happen on the Entra-hosted self-service page.</div>
           <div className="controls" style={{ marginTop: 14, marginBottom: 0 }}><button className="btn primary" onClick={() => toast(ENTRA_NOTE)}>Change password</button></div>

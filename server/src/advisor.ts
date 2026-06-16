@@ -7,6 +7,7 @@
 // (the original advise() shape) so existing callers/tests keep working.
 import type { Tx, Goal } from './store.js';
 import { detectRecurring } from './recurring.js';
+import { isMovement } from './classifier.js';
 import { projectGoals } from './goals.js';
 
 const DAY = 864e5;
@@ -18,7 +19,8 @@ function shift(dateISO: string, days: number): string {
 const median = (a: number[]) => { if (!a.length) return 0; const s = [...a].sort((x, y) => x - y); const m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 
 // ---- needs / wants / savings classification (50-30-20) ----
-const NEEDS = new Set(['Rent & Housing', 'Groceries & Household', 'Utilities & Bills', 'Insurance', 'Health & Pharmacy', 'Gas & Convenience', 'Auto', 'Loan Payments', 'Credit Card Payments', 'Taxes', 'Education', 'Legal & Court']);
+// Debt and savings are money movement, handled separately, so they're not "needs".
+const NEEDS = new Set(['Rent & Housing', 'Groceries & Household', 'Utilities & Bills', 'Insurance', 'Health & Pharmacy', 'Gas & Convenience', 'Auto', 'Taxes', 'Education', 'Legal & Court']);
 const SAVINGS = new Set(['Savings & Investments']);
 const bucketOf = (cat: string): 'needs' | 'wants' | 'savings' => NEEDS.has(cat) ? 'needs' : SAVINGS.has(cat) ? 'savings' : 'wants';
 // "Big by nature": large single charges here are normal, not anomalies.
@@ -47,7 +49,9 @@ export function buildAdvisor(tx: Tx[], goals: Goal[], from: string, to: string) 
   const mo = Math.max(1, dayCount / 30.44);
 
   const income = cur.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
-  const spend = Math.abs(cur.filter(t => t.amount < 0).reduce((s, t) => s + t.amount, 0));
+  // Spending = consumption only; money movement (debt payoff, transfers, saving) is a
+  // balance-sheet move, not consumption, so it's excluded from spend/net/ratios.
+  const spend = Math.abs(cur.filter(t => t.amount < 0 && !isMovement(t.category)).reduce((s, t) => s + t.amount, 0));
   const net = income - spend;
   const rate = income > 0 ? net / income * 100 : 0;
 
@@ -57,12 +61,16 @@ export function buildAdvisor(tx: Tx[], goals: Goal[], from: string, to: string) 
   const cnt = (c: string) => catCur[c]?.count || 0;
   const per = (c: string) => get(c) / mo;
 
-  const recurring = detectRecurring(cur);
+  // Subscriptions are a full-history concept (a monthly plan has only ONE charge
+  // inside a 1-month window, below the 3-charge threshold). Detect over all tx so the
+  // Advisor's subscription weight + tips match the Reports and Subscriptions pages.
+  const recurring = detectRecurring(tx);
   const goalView = projectGoals(goals, tx);
 
   // ===================== 50/30/20 BUDGET =====================
   let needs = 0, wants = 0, savingsSpent = 0;
   for (const [c, v] of Object.entries(catCur)) {
+    if (isMovement(c)) { if (c === 'Savings & Investments') savingsSpent += v.total; continue; } // money movement isn't needs/wants
     const b = bucketOf(c);
     if (b === 'needs') needs += v.total; else if (b === 'savings') savingsSpent += v.total; else wants += v.total;
   }
@@ -95,22 +103,27 @@ export function buildAdvisor(tx: Tx[], goals: Goal[], from: string, to: string) 
     status: fNeeds >= 14 ? 'good' : fNeeds >= 8 ? 'ok' : 'warn',
     detail: `Needs are ${r2(needsPct)}% of income (target ≤ 50%).` });
   // 3) debt service (0..20)
-  const debt = get('Loan Payments') + get('Credit Card Payments');
-  const debtPct = income > 0 ? debt / income * 100 : 0;
+  // Regular debt service only: a single charge bigger than the period's income is a
+  // lump-sum payoff funded from savings, not an ongoing monthly burden.
+  const regularDebt = income > 0 ? Math.abs(cur.filter(t => t.amount < 0 && (t.category === 'Loan Payments' || t.category === 'Credit Card Payments') && Math.abs(t.amount) <= income).reduce((s, t) => s + t.amount, 0)) : 0;
+  const rawDebt = get('Loan Payments') + get('Credit Card Payments');
+  const debtPct = income > 0 ? regularDebt / income * 100 : 0;
   const fDebt = clamp(debtPct <= 10 ? 20 : debtPct >= 40 ? 0 : (1 - (debtPct - 10) / 30) * 20, 0, 20);
   factors.push({ label: 'Debt service', max: 20, points: r2(fDebt),
     status: fDebt >= 14 ? 'good' : fDebt >= 8 ? 'ok' : 'warn',
-    detail: debt > 0 ? `${r2(debtPct)}% of income to loans & cards (target ≤ 10%).` : 'No loan or card payments this period.' });
+    detail: regularDebt > 0 ? `${r2(debtPct)}% of income to loans & cards (target ≤ 10%).`
+      : rawDebt > 0 ? 'A one-time loan/card payoff this period, no ongoing debt service counted.'
+      : 'No loan or card payments this period.' });
   // 4) subscription load (0..15)
   const subMonthly = recurring.totals.monthlyTotal;
   const subPct = income > 0 ? subMonthly / (income / mo) * 100 : 0;
   const fSubs = clamp(subPct <= 4 ? 15 : subPct >= 14 ? 0 : (1 - (subPct - 4) / 10) * 15, 0, 15);
   factors.push({ label: 'Subscription weight', max: 15, points: r2(fSubs),
     status: fSubs >= 11 ? 'good' : fSubs >= 6 ? 'ok' : 'warn',
-    detail: `${recurring.totals.activeCount} active subscriptions ≈ ${r2(subPct)}% of income.` });
+    detail: `${recurring.totals.activeCount} active subscription${recurring.totals.activeCount === 1 ? '' : 's'} ≈ ${r2(subPct)}% of income.` });
   // 5) spending stability (0..15): coefficient of variation of monthly spend (full history)
   const byMonth: Record<string, number> = {};
-  for (const t of tx) if (t.amount < 0) byMonth[t.date.slice(0, 7)] = (byMonth[t.date.slice(0, 7)] || 0) + Math.abs(t.amount);
+  for (const t of tx) if (t.amount < 0 && !isMovement(t.category)) byMonth[t.date.slice(0, 7)] = (byMonth[t.date.slice(0, 7)] || 0) + Math.abs(t.amount);
   const months = Object.values(byMonth);
   let cov = 0;
   if (months.length >= 3) { const mean = months.reduce((s, x) => s + x, 0) / months.length; const sd = Math.sqrt(months.reduce((s, x) => s + (x - mean) ** 2, 0) / months.length); cov = mean ? sd / mean : 0; }
@@ -132,6 +145,7 @@ export function buildAdvisor(tx: Tx[], goals: Goal[], from: string, to: string) 
   const trends: { category: string; now: number; prev: number; deltaPct: number; deltaAbs: number; direction: 'up' | 'down' | 'new' }[] = [];
   if (prev.length) {
     for (const [c, v] of Object.entries(catCur)) {
+      if (isMovement(c)) continue; // money movement (debt payoff, transfers, saving) isn't a spending change
       const p = catPrev[c]?.total || 0;
       const deltaAbs = v.total - p;
       if (Math.abs(deltaAbs) < 40) continue;

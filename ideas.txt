@@ -7,3 +7,4 @@ Goal tracking ("save $5,000 for a house")
 Natural language questions ("Where did my money go this month?")
 charge notifications
 investment tracker
+add specific ledger items to specific category

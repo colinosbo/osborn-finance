@@ -13,12 +13,14 @@ import { parseCSV, autoMap, parseDateStr, parseAmtStr } from './csv.js';
 import { summarize } from './analytics.js';
 import { buildAdvisor } from './advisor.js';
 import { Plaid, runItemSync, encryptToken, verifyPlaidWebhook } from './plaid.js';
+import { runScheduledCapture, isCaptureDay, isInvestmentType } from './snapshots.js';
 import { Billing, PLAN_PRICES, parseStripeEvent, verifyStripeSignature, fetchSubscriptionPlan } from './stripe.js';
 import { decrypt } from './crypto.js';
-import { buildReport, buildRangeReport, buildMonthReport, CADENCES, type Cadence } from './reports.js';
+import { buildReport, buildRangeReport, buildMonthReport, buildWindowReport, buildInvestments, CADENCES, type Cadence } from './reports.js';
 import { detectRecurring } from './recurring.js';
 import { projectGoals } from './goals.js';
 import { buildDebtPlan } from './debt.js';
+import { detectRefunds, withoutRefunds } from './refunds.js';
 
 // Resolve a request's time window to [from (exclusive), to (inclusive)]. Accepts an
 // explicit calendar month (from/to) or a rolling day-window (days), anchored on today.
@@ -194,7 +196,12 @@ export async function buildApp(store: Store) {
     if (map.date < 0 || map.desc < 0 || (map.amt < 0 && map.debit < 0 && map.credit < 0))
       return res.status(422).json({ error: 'could not detect date/description/amount columns', detected: map });
     const overrides = await store.getOverrides(u(req).id);
-    const existing = await store.txKeys(u(req).id);
+    // Count-aware dedup: `have` = how many of this exact row already exist; `taken`
+    // = how many we've seen so far in THIS file. We skip a row only while we're
+    // still "covering" the existing count (overlap with a prior import); any extra
+    // identical rows in the file are real same-day repeats and get imported.
+    const have = await store.txCounts(u(req).id);
+    const taken = new Map<string, number>();
     const out = []; let skipped = 0, dupes = 0;
     for (let i = 1; i < rows.length; i++) {
       const r = rows[i];
@@ -209,8 +216,10 @@ export async function buildApp(store: Store) {
       if (!date || amt === null) { skipped++; continue; }
       const raw = String(r[map.desc] ?? '').trim() || '(no description)';
       const key = `${date}|${amt}|${cleanDesc(raw)}`;
-      if (existing.has(key)) { dupes++; continue; }
-      existing.add(key);
+      const used = taken.get(key) || 0;
+      taken.set(key, used + 1);
+      // Skip only while this row still overlaps an already-imported one.
+      if (used < (have.get(key) || 0)) { dupes++; continue; }
       const merch = merchant(raw);
       let category = classify(raw, amt);
       if (amt < 0 && overrides[merch]) category = overrides[merch];
@@ -236,7 +245,11 @@ export async function buildApp(store: Store) {
       limit: q.limit || 25, offset: q.offset || 0,
       sort: q.sort || 'date', dir: q.dir || 'desc'
     });
-    res.json(r);
+    // Tag refunded purchases / their refunds so the ledger can mark them as netted
+    // out of totals. Roles are computed over the full set (pairs can cross pages).
+    const { roleById } = detectRefunds(await store.allTx(u(req).id));
+    const rows = roleById.size ? r.rows.map(t => roleById.has(t.id) ? { ...t, refund: roleById.get(t.id) } : t) : r.rows;
+    res.json({ ...r, rows });
   });
   app.post('/api/transactions/recategorize', async (req, res) => {
     const v = parse(schemas.recategorize, req.body); // I3
@@ -264,6 +277,25 @@ export async function buildApp(store: Store) {
     res.json({ updated: n, total: txs.length });
   });
   app.get('/api/categories', (_q, res) => res.json(ALL_CATS));
+  // Demo request (lead capture from the "Book a demo" button). Validates and records
+  // the lead; real delivery (email/CRM) is a later integration.
+  app.post('/api/demo-request', async (req, res) => {
+    const v = parse(schemas.demoRequest, req.body);
+    if (!v.ok) return res.status(400).json({ error: v.error });
+    const d = v.data;
+    const summary = `${d.firstName} ${d.lastName} <${d.email}>${d.phone ? ' · ' + d.phone : ''}${d.company ? ' · ' + d.company : ''}${d.comments ? ' · ' + d.comments : ''}`.slice(0, 800);
+    console.log('[demo-request]', summary);
+    await store.audit(null, 'demo_request', summary, ipHash(req));
+    res.json({ ok: true });
+  });
+  // Only the categories the user actually has transactions in (kept in ALL_CATS
+  // order), so filter dropdowns stay short. The full list stays at /api/categories
+  // for re-categorizing a transaction to anything.
+  app.get('/api/tx-categories', async (req, res) => {
+    const tx = await store.allTx(u(req).id);
+    const used = new Set(tx.map(t => t.category));
+    res.json(ALL_CATS.filter(c => used.has(c)));
+  });
   // Months the user actually has activity in, most recent first, capped to the
   // last 12. A month is only listed if at least one transaction falls inside that
   // month's window using the EXACT same filter the summary route uses (from = last
@@ -283,17 +315,22 @@ export async function buildApp(store: Store) {
     const months = [...candidates]
       .filter(ym => { const { from, to } = monthWindow(ym); return tx.some(t => t.date > from && t.date <= to); })
       .sort().reverse().slice(0, 12);
-    res.json({ months });
+    // Distinct years the user actually has activity in (most recent first, capped to
+    // the last 8). Powers the "by year" grouping, which can reach further back than
+    // the 12-month month list.
+    const years = [...new Set(tx.map(t => t.date.slice(0, 4)))].sort().reverse().slice(0, 8).map(Number);
+    res.json({ months, years });
   });
 
   // ---- summary + advisor (F7/F8/F10) ----
   app.get('/api/summary', async (req, res) => {
-    const tx = await store.allTx(u(req).id);
+    // Net out refunded purchases so a buy-then-return doesn't inflate money in/out.
+    const tx = withoutRefunds(await store.allTx(u(req).id));
     const { from, to } = rangeWindow(req.query, new Date().toISOString().slice(0, 10), 365);
     res.json(summarize(tx, from, to));
   });
   app.get('/api/advisor', async (req, res) => {
-    const tx = await store.allTx(u(req).id);
+    const tx = withoutRefunds(await store.allTx(u(req).id));
     const goals = await store.listGoals(u(req).id);
     const { from, to } = rangeWindow(req.query, new Date().toISOString().slice(0, 10), 365);
     res.json(buildAdvisor(tx, goals, from, to));
@@ -331,7 +368,7 @@ export async function buildApp(store: Store) {
       const bal = Math.max(0, acctById[g.account_id].current_balance || 0);
       g.saved_amount = g.kind === 'payoff' && g.start_balance != null ? Math.max(0, g.start_balance - bal) : bal;
     }
-    const out = projectGoals(goals, await store.allTx(u(req).id));
+    const out = projectGoals(goals, withoutRefunds(await store.allTx(u(req).id)));
     out.goals = out.goals.map(gv => ({
       ...gv,
       account: gv.account_id && acctById[gv.account_id]
@@ -381,21 +418,41 @@ export async function buildApp(store: Store) {
   // ---- reports: a calendar month (?from=&to=, like the rest of the app), or an
   // arbitrary day range (?days=30) as a fallback, generated on the spot ----
   app.get('/api/reports', async (req, res) => {
-    const tx = await store.allTx(u(req).id);
-    const to = typeof req.query.to === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.to) ? req.query.to : '';
-    const month = typeof req.query.month === 'string' && /^\d{4}-\d{2}$/.test(req.query.month) ? req.query.month : (to ? to.slice(0, 7) : '');
-    if (month) return res.json(buildMonthReport(tx, month));
+    const tx = withoutRefunds(await store.allTx(u(req).id));
+    const dre = /^\d{4}-\d{2}-\d{2}$/;
+    const from = typeof req.query.from === 'string' && dre.test(req.query.from) ? req.query.from : '';
+    const to = typeof req.query.to === 'string' && dre.test(req.query.to) ? req.query.to : '';
+    const monthParam = typeof req.query.month === 'string' && /^\d{4}-\d{2}$/.test(req.query.month) ? req.query.month : '';
+    if (monthParam || (from && to)) {
+      const inv = (await store.listAccounts(u(req).id)).filter(a => isInvestmentType(a.type));
+      const withInv = async (rep: { period: { from: string; to: string } }) => {
+        const snaps = inv.length ? await store.listSnapshots(u(req).id, inv.map(a => a.id)) : [];
+        return { ...rep, investments: buildInvestments(inv, snaps, rep.period.from, rep.period.to, tx) };
+      };
+      // A multi-month window (a full year) vs a single calendar month.
+      const spanDays = from && to ? (Date.parse(to) - Date.parse(from)) / 864e5 : 0;
+      if (from && to && spanDays > 31) return res.json(await withInv(buildWindowReport(tx, from, to)));
+      return res.json(await withInv(buildMonthReport(tx, monthParam || to.slice(0, 7))));
+    }
     const v = parse(schemas.reportRange, req.query);
     if (!v.ok) return res.status(400).json({ error: v.error });
     res.json(buildRangeReport(tx, v.data.days || 30, v.data.offset || 0));
   });
+  // Internal: let an external scheduler (e.g. an Azure timer) trigger a snapshot
+  // capture. Disabled unless INTERNAL_SNAPSHOT_KEY is set and the header matches.
+  app.post('/internal/snapshot-run', async (req, res) => {
+    const key = process.env.INTERNAL_SNAPSHOT_KEY;
+    if (!key || req.get('x-internal-key') !== key) return res.status(401).json({ error: 'unauthorized' });
+    res.json(await runScheduledCapture(store, decrypt));
+  });
+
   // ---- reports: named cadences (weekly | monthly | six_month | year_in_review) ----
   app.get('/api/reports/:cadence', async (req, res) => {
     const cadence = req.params.cadence as Cadence;
     if (!CADENCES.includes(cadence)) return res.status(400).json({ error: 'unknown cadence' });
     const v = parse(schemas.reportQuery, req.query);
     if (!v.ok) return res.status(400).json({ error: v.error });
-    const tx = await store.allTx(u(req).id);
+    const tx = withoutRefunds(await store.allTx(u(req).id));
     res.json(buildReport(tx, cadence, v.data.offset || 0));
   });
 
@@ -502,5 +559,21 @@ if (isMain) {
 
   const store = await makeStore();
   const app = await buildApp(store);
-  app.listen(cfg.port, () => console.log(`Osborn Finance API on :${cfg.port} (auth=${cfg.authMode}, plaid=${cfg.plaid.mock ? 'mock' : cfg.plaid.env}, stripe=${cfg.stripe.mock ? 'mock' : 'live'})`));
+  app.listen(cfg.port, () => console.log(`Covisor API on :${cfg.port} (auth=${cfg.authMode}, plaid=${cfg.plaid.mock ? 'mock' : cfg.plaid.env}, stripe=${cfg.stripe.mock ? 'mock' : 'live'})`));
+
+  // Investment snapshots: a free daily check that only calls Plaid on capture
+  // days (1st, 15th, last of month) and only for investment-holding items.
+  let lastSnap = '';
+  const snapTick = async () => {
+    const now = new Date();
+    const key = now.toISOString().slice(0, 10);
+    if (key === lastSnap || !isCaptureDay(now)) return;
+    lastSnap = key;
+    try {
+      const r = await runScheduledCapture(store, decrypt);
+      if (r.items) console.log(`[snapshots] captured ${r.accounts} account(s) across ${r.items} item(s)`);
+    } catch (e) { console.error('[snapshots] capture failed:', e instanceof Error ? e.message : e); }
+  };
+  snapTick();                                // run once at boot in case today is a capture day
+  setInterval(snapTick, 6 * 60 * 60 * 1000); // re-check every 6 hours
 }

@@ -1,6 +1,6 @@
 // API client. Dev auth: x-user-email header (Entra JWT in prod).
 const EMAIL_KEY = 'of_dev_email';
-export function getEmail() { return localStorage.getItem(EMAIL_KEY) || 'demo@osbornfinance.com'; }
+export function getEmail() { return localStorage.getItem(EMAIL_KEY) || 'demo@covisor.com'; }
 export function setEmail(e: string) { localStorage.setItem(EMAIL_KEY, e); }
 export async function api<T = unknown>(path: string, opts: { method?: string; body?: unknown; raw?: string } = {}): Promise<T> {
   const res = await fetch(path, {
@@ -27,6 +27,18 @@ export const COLORS: Record<string, string> = {
  'Bars & Nightlife':'#e8b500','Personal Care':'#d9480f','Fees':'#868e96','Taxes':'#228be6','Other':'#adb5bd','Income & Refunds':'#188d49'
 };
 export const color = (c: string) => COLORS[c] || '#adb5bd';
+
+// Donut slices: the top N categories plus a single rolled-up "Other". Any remainder
+// is folded INTO an existing "Other" category so a legend never shows two "Other" rows.
+export function donutData(cats: { name: string; total: number }[], n = 9): { name: string; total: number }[] {
+  const top = cats.slice(0, n).map(c => ({ name: c.name, total: c.total }));
+  const rest = cats.slice(n).reduce((s, c) => s + c.total, 0);
+  if (rest > 0) {
+    const other = top.find(d => d.name === 'Other');
+    if (other) other.total += rest; else top.push({ name: 'Other', total: rest });
+  }
+  return top;
+}
 // Display label for a plan key (internal key "family" shows as "Personal+").
 export const planLabel = (p?: string) => ({ free: 'Free', personal: 'Personal', family: 'Personal+', enterprise: 'Enterprise' } as Record<string, string>)[p || ''] || p || '—';
 

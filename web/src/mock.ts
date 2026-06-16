@@ -27,7 +27,7 @@ export function mockActivity(): ActivityEvent[] {
 export function mockProfile(me?: Partial<Profile> & { email?: string; plan?: string; id?: string }): Profile {
   return {
     id: me?.id || 'usr_mock',
-    email: me?.email || 'demo@osbornfinance.com',
+    email: me?.email || 'demo@covisor.com',
     emailVerified: true,
     displayName: me?.displayName || (me?.email ? me.email.split('@')[0] : 'Demo User'),
     preferredName: me?.preferredName || '',

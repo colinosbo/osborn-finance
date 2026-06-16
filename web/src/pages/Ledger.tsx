@@ -5,7 +5,7 @@ import type { Toast } from '../App';
 import EmptyState from '../EmptyState';
 import RangePicker, { rangeFromParams, applyRange, type RangeOpt } from '../RangePicker';
 
-interface Tx { id: string; date: string; name: string; merchant: string; amount: number; balance: number | null; category: string; }
+interface Tx { id: string; date: string; name: string; merchant: string; amount: number; balance: number | null; category: string; refund?: 'charge' | 'refund'; }
 interface Group { merchant: string; category: string; count: number; total: number; rows: Tx[] }
 
 export default function Ledger({ toast }: { toast: Toast }) {
@@ -13,13 +13,20 @@ export default function Ledger({ toast }: { toast: Toast }) {
   const [rows, setRows] = useState<Tx[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
-  const [cats, setCats] = useState<string[]>([]);
+  const [cats, setCats] = useState<string[]>([]);            // all categories (re-categorize menu)
+  const [usedCats, setUsedCats] = useState<string[]>([]);    // only categories in the user's data (filter)
   const [cat, setCat] = useState(params.get('cat') || '');
   const [range, setRange] = useState<RangeOpt>(() => rangeFromParams(params));
   const [flow, setFlow] = useState(params.get('flow') || '');
   const [q, setQ] = useState(params.get('q') || '');
   const [editing, setEditing] = useState<string | null>(null);
   const [grouped, setGrouped] = useState(true);
+  // List-view amount sort: '' = default (date, newest first), 'desc' = highest
+  // amount first, 'asc' = lowest first. Clicking the Amount header cycles them.
+  const [amtSort, setAmtSort] = useState<'' | 'desc' | 'asc'>('');
+  // Grouped-view Total sort: '' = default (biggest groups by size), 'desc' = highest
+  // total first, 'asc' = lowest first. Clicking the Total header cycles them.
+  const [grpSort, setGrpSort] = useState<'' | 'desc' | 'asc'>('');
   const [allRows, setAllRows] = useState<Tx[]>([]);
   // `open` = which merchant group is expanded; arriving with ?open=<merchant> from a
   // top-merchant click lands on the full grouped list with that group already open.
@@ -33,8 +40,11 @@ export default function Ledger({ toast }: { toast: Toast }) {
     const p = new URLSearchParams({ limit: String(LIMIT), offset: String(page * LIMIT) });
     applyRange(p, range);
     if (cat) p.set('cat', cat); if (flow) p.set('flow', flow); if (q) p.set('q', q);
+    if (amtSort) { p.set('sort', 'amount'); p.set('dir', amtSort); }
     api<{ rows: Tx[]; total: number }>(`/api/transactions?${p}`).then(r => { setRows(r.rows); setTotal(r.total); });
-  }, [page, cat, flow, q, range]);
+  }, [page, cat, flow, q, range, amtSort]);
+  // Cycle the Amount-column sort: default → highest first → lowest first → default.
+  const cycleAmtSort = () => { setPage(0); setAmtSort(s => s === '' ? 'desc' : s === 'desc' ? 'asc' : ''); };
   // full pull for grouping (grouped mode)
   const loadAll = useCallback(() => {
     const p = new URLSearchParams({ limit: '200' });
@@ -44,7 +54,7 @@ export default function Ledger({ toast }: { toast: Toast }) {
   }, [cat, flow, q, range]);
 
   useEffect(() => { if (grouped) loadAll(); else load(); }, [grouped, load, loadAll]);
-  useEffect(() => { api<string[]>('/api/categories').then(setCats); }, []);
+  useEffect(() => { api<string[]>('/api/categories').then(setCats); api<string[]>('/api/tx-categories').then(setUsedCats); }, []);
   // detect whether the account has any transactions at all (unfiltered),
   // and whether a bank is connected (so we can tell "no bank" from "still syncing").
   useEffect(() => {
@@ -59,8 +69,14 @@ export default function Ledger({ toast }: { toast: Toast }) {
       (g[k] ||= { merchant: k, category: t.category, count: 0, total: 0, rows: [] });
       g[k].count++; g[k].total += t.amount; g[k].rows.push(t);
     }
-    return Object.values(g).sort((a, b) => Math.abs(b.total) - Math.abs(a.total));
-  }, [allRows]);
+    const arr = Object.values(g);
+    if (grpSort === 'desc') arr.sort((a, b) => Math.abs(b.total) - Math.abs(a.total));     // biggest group by size first
+    else if (grpSort === 'asc') arr.sort((a, b) => Math.abs(a.total) - Math.abs(b.total)); // smallest group by size first
+    else arr.sort((a, b) => Math.abs(b.total) - Math.abs(a.total));         // default: biggest by size
+    return arr;
+  }, [allRows, grpSort]);
+  // Cycle the grouped Total sort: default → highest first → lowest first → default.
+  const cycleGrpSort = () => setGrpSort(s => s === '' ? 'desc' : s === 'desc' ? 'asc' : '');
 
   const recat = async (merchant: string, newCat: string) => {
     const r = await api<{ updated: number }>('/api/transactions/recategorize', { method: 'POST', body: { merchant, category: newCat } });
@@ -110,7 +126,7 @@ export default function Ledger({ toast }: { toast: Toast }) {
           </div>
           <select value={cat} onChange={e => { setCat(e.target.value); setPage(0); }}>
             <option value="">All categories</option>
-            {cats.map(c => <option key={c}>{c}</option>)}
+            {usedCats.map(c => <option key={c}>{c}</option>)}
           </select>
           <select value={flow} onChange={e => { setFlow(e.target.value); setPage(0); }}>
             <option value="">Money in & out</option><option value="out">Spending only</option><option value="in">Income only</option>
@@ -122,7 +138,7 @@ export default function Ledger({ toast }: { toast: Toast }) {
         {grouped ? (
           <div style={{ overflowX: 'auto' }}>
             <table>
-              <thead><tr><th style={{ width: 18 }}></th><th>Merchant</th><th>Category</th><th className="amt">Count</th><th className="amt">Total</th></tr></thead>
+              <thead><tr><th style={{ width: 18 }}></th><th>Merchant</th><th>Category</th><th className="amt">Count</th><th className={'amt amt-sort' + (grpSort ? ' active' : '')} onClick={cycleGrpSort} title="Click to sort by total (high → low → default)">Total <span className="sort-ind">{grpSort === 'desc' ? '↓' : grpSort === 'asc' ? '↑' : '⇅'}</span></th></tr></thead>
               <tbody>
                 {groups.map(g => (
                   <Fragment key={g.merchant}>
@@ -157,18 +173,18 @@ export default function Ledger({ toast }: { toast: Toast }) {
           <>
             <div style={{ overflowX: 'auto' }}>
               <table>
-                <thead><tr><th>Date</th><th>Description</th><th>Category</th><th className="amt">Amount</th><th className="amt">Balance</th></tr></thead>
+                <thead><tr><th>Date</th><th>Description</th><th>Category</th><th className={'amt amt-sort' + (amtSort ? ' active' : '')} onClick={cycleAmtSort} title="Click to sort by amount (high → low → default)">Amount <span className="sort-ind">{amtSort === 'desc' ? '↓' : amtSort === 'asc' ? '↑' : '⇅'}</span></th><th className="amt">Balance</th></tr></thead>
                 <tbody>
                   {rows.map(t => (
                     <tr key={t.id}>
                       <td style={{ whiteSpace: 'nowrap', color: 'var(--muted)' }}>{t.date}</td>
-                      <td>{t.name}</td>
+                      <td>{t.name}{t.refund && <span className="refund-tag" title="Netted out of income & spending totals">{t.refund === 'refund' ? 'Refund' : 'Refunded'}</span>}</td>
                       <td>
                         {editing === t.id
                           ? <select autoFocus defaultValue={t.category} onChange={e => recat(t.merchant, e.target.value)} onBlur={() => setEditing(null)}>{cats.map(c => <option key={c}>{c}</option>)}</select>
                           : <span className="tag" onClick={() => setEditing(t.id)} title="Click to recategorize"><i style={{ background: color(t.category) }} />{t.category}</span>}
                       </td>
-                      <td className="amt" style={{ fontWeight: 650, color: t.amount >= 0 ? 'var(--green)' : 'var(--ink)' }}>{t.amount >= 0 ? '+' : ''}{fmt(t.amount)}</td>
+                      <td className="amt" title={t.refund ? "Doesn't count toward your totals" : undefined} style={{ fontWeight: 650, textDecoration: t.refund ? 'line-through' : undefined, color: t.refund ? 'var(--faint)' : t.amount >= 0 ? 'var(--green)' : 'var(--ink)' }}>{t.amount >= 0 ? '+' : ''}{fmt(t.amount)}</td>
                       <td className="amt" style={{ color: 'var(--faint)' }}>{t.balance != null ? fmt(t.balance) : '·'}</td>
                     </tr>
                   ))}

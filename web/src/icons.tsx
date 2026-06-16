@@ -3,7 +3,7 @@
 export type IconName =
   | 'dashboard' | 'bank' | 'ledger' | 'advisor' | 'budgets'
   | 'reports' | 'subscriptions' | 'plans' | 'settings' | 'profile'
-  | 'shield' | 'lock' | 'cloud' | 'card' | 'goal'
+  | 'shield' | 'lock' | 'cloud' | 'card' | 'goal' | 'calendar'
   // empty-state aliases
   | 'chart' | 'repeat' | 'spark';
 
@@ -22,7 +22,8 @@ const PATHS: Record<string, JSX.Element> = {
   lock: <><rect x="5" y="10.5" width="14" height="9.5" rx="1.6" /><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3" /></>,
   cloud: <><path d="M7 18h10.5a3.5 3.5 0 0 0 .4-6.98A5.5 5.5 0 0 0 7.2 9.6 4.2 4.2 0 0 0 7 18z" /></>,
   card: <><rect x="3" y="5" width="18" height="14" rx="2" /><line x1="3" y1="9.5" x2="21" y2="9.5" /></>,
-  goal: <><path d="M5 21V4" /><path d="M5 4l11 0a1 1 0 0 1 .8 1.6L14 9l2.8 3.4a1 1 0 0 1-.8 1.6H5" /></>
+  goal: <><path d="M5 21V4" /><path d="M5 4l11 0a1 1 0 0 1 .8 1.6L14 9l2.8 3.4a1 1 0 0 1-.8 1.6H5" /></>,
+  calendar: <><rect x="3.5" y="5" width="17" height="15" rx="2" /><line x1="3.5" y1="9.5" x2="20.5" y2="9.5" /><line x1="8" y1="3" x2="8" y2="6.5" /><line x1="16" y1="3" x2="16" y2="6.5" /></>
 };
 // aliases so empty states can keep their semantic names
 PATHS.chart = PATHS.reports;

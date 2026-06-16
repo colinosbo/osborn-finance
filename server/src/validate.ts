@@ -12,6 +12,14 @@ export const schemas = {
   checkout: z.object({
     plan: z.enum(['personal', 'family', 'enterprise'])
   }),
+  demoRequest: z.object({
+    firstName: z.string().trim().min(1).max(100),
+    lastName: z.string().trim().min(1).max(100),
+    email: z.string().trim().email().max(200),
+    phone: z.string().trim().max(40).optional(),
+    company: z.string().trim().max(120).optional(),
+    comments: z.string().trim().max(2000).optional()
+  }),
   plaidExchange: z.object({
     public_token: z.string().min(1).max(500)
   }),

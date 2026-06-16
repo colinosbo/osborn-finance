@@ -1,5 +1,6 @@
 // Summary + Advisor engines (server-side ports of the app logic).
 import type { Tx } from './store.js';
+import { isMovement } from './classifier.js';
 
 // Window is [from (exclusive), to (inclusive)]. Empty `from` = no lower bound (all
 // time); empty `to` = up to the latest data. The route computes from/to for both a
@@ -8,14 +9,17 @@ export function summarize(tx: Tx[], from: string, to: string) {
   const anchor = to || (tx.length ? tx[tx.length - 1].date : new Date().toISOString().slice(0, 10));
   const cur = tx.filter(t => (!from || t.date > from) && (!to || t.date <= to));
   const income = cur.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
-  const spend = Math.abs(cur.filter(t => t.amount < 0).reduce((s, t) => s + t.amount, 0));
+  // Spending = consumption only. Money movement (debt payoff, transfers, saving) is
+  // not spending, so it's excluded from the totals, the donut, and top merchants.
+  const isSpend = (t: Tx) => t.amount < 0 && !isMovement(t.category);
+  const spend = Math.abs(cur.filter(isSpend).reduce((s, t) => s + t.amount, 0));
   const cats: Record<string, { total: number; count: number }> = {};
-  for (const t of cur) if (t.amount < 0) {
+  for (const t of cur) if (isSpend(t)) {
     cats[t.category] = cats[t.category] || { total: 0, count: 0 };
     cats[t.category].total += Math.abs(t.amount); cats[t.category].count++;
   }
   const merch: Record<string, { total: number; count: number }> = {};
-  for (const t of cur) if (t.amount < 0) {
+  for (const t of cur) if (isSpend(t)) {
     merch[t.merchant] = merch[t.merchant] || { total: 0, count: 0 };
     merch[t.merchant].total += Math.abs(t.amount); merch[t.merchant].count++;
   }
@@ -23,7 +27,7 @@ export function summarize(tx: Tx[], from: string, to: string) {
   for (const t of cur) {
     const k = t.date.slice(0, 7);
     months[k] = months[k] || { in: 0, out: 0 };
-    if (t.amount > 0) months[k].in += t.amount; else months[k].out += Math.abs(t.amount);
+    if (t.amount > 0) months[k].in += t.amount; else if (isSpend(t)) months[k].out += Math.abs(t.amount);
   }
   return {
     hasAny: tx.length > 0,
@@ -48,7 +52,9 @@ export function avgMonthly(tx: Tx[], latest: string) {
   const spanD = tx.length ? (Date.parse(tx[tx.length - 1].date) - Date.parse(tx[0].date)) / 864e5 : 0;
   const windowDays = Math.min(365, Math.max(28, Math.ceil(spanD)));
   const cutoff = shift(latest, -windowDays);
-  const win = tx.filter(t => t.date > cutoff && t.amount < 0);
+  // Consumption only: a "normal month of spending" excludes money movement (debt
+  // payoff, transfers, saving), consistent with the Spending KPI it sits beside.
+  const win = tx.filter(t => t.date > cutoff && t.amount < 0 && !isMovement(t.category));
   if (!win.length) return { value: 0, excluded: 0, excludedSum: 0, months: 0 };
   const byMonth: Record<string, number> = {};
   for (const t of win) byMonth[t.date.slice(0, 7)] = (byMonth[t.date.slice(0, 7)] || 0) + Math.abs(t.amount);
@@ -68,7 +74,8 @@ export function advise(tx: Tx[], days: number, latest: string) {
   const cutoff = days ? shift(latest, -days) : '';
   const cur = cutoff ? tx.filter(t => t.date > cutoff) : tx;
   const income = cur.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
-  const spend = Math.abs(cur.filter(t => t.amount < 0).reduce((s, t) => s + t.amount, 0));
+  // Spending = consumption only (exclude debt payoff / transfers / saving).
+  const spend = Math.abs(cur.filter(t => t.amount < 0 && !isMovement(t.category)).reduce((s, t) => s + t.amount, 0));
   const dates = cur.map(t => t.date).sort();
   const dayCount = dates.length ? Math.max(1, (Date.parse(dates[dates.length - 1]) - Date.parse(dates[0])) / 864e5 + 1) : 1;
   const mo = Math.max(1, dayCount / 30.44);
@@ -100,8 +107,10 @@ export function advise(tx: Tx[], days: number, latest: string) {
   }
   if (get('Fees') > 0) tips.push({ icon: '$', title: 'Avoidable fees', savePerMonth: per('Fees'), text: `$${get('Fees').toFixed(2)} in ATM/transfer fees. In-network ATMs make this $0.` });
   if (get('Cash Withdrawals') > 0) tips.push({ icon: '?', title: 'Untracked cash', savePerMonth: 0, text: `$${get('Cash Withdrawals').toFixed(0)} withdrawn as cash — invisible to the dashboard.` });
-  const debt = get('Loan Payments') + get('Credit Card Payments');
-  if (debt > 0 && income > 0 && debt / income > .25) tips.push({ icon: '↓', title: `Debt service is ${(debt / income * 100).toFixed(0)}% of income`, savePerMonth: 0, text: `$${debt.toFixed(0)} went to loans and cards. Prioritize the highest-rate balance.` });
+  // Only count recurring-style debt service, not a one-time lump-sum payoff (a charge
+  // bigger than the period's income is funded from savings, not monthly cash flow).
+  const regularDebt = income > 0 ? Math.abs(cur.filter(t => t.amount < 0 && (t.category === 'Loan Payments' || t.category === 'Credit Card Payments') && Math.abs(t.amount) <= income).reduce((s, t) => s + t.amount, 0)) : 0;
+  if (regularDebt > 0 && income > 0 && regularDebt / income > .25) tips.push({ icon: '↓', title: `Debt service is ${(regularDebt / income * 100).toFixed(0)}% of income`, savePerMonth: 0, text: `$${regularDebt.toFixed(0)} went to loans and cards. Prioritize the highest-rate balance.` });
   if (income > 0 && get('Savings & Investments') < income * .05) tips.push({ icon: '↑', title: 'Investing is light', savePerMonth: 0, text: `Only $${per('Savings & Investments').toFixed(0)}/mo to savings/investments. Even 5% of income automated builds momentum.` });
   if (get('P2P & Transfers') > income * .08 && get('P2P & Transfers') > 200) tips.push({ icon: '⇄', title: 'Large P2P outflow', savePerMonth: 0, text: `$${get('P2P & Transfers').toFixed(0)} via P2P apps — easiest spending to lose track of.` });
   const pinned = tips.filter(t => t.pinned);

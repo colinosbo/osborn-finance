@@ -1,4 +1,12 @@
 // Classification engine — same rules as the client app (Phase 1+2), source of truth server-side.
+
+// Well-known recurring digital/service vendors. Exported as the single source of
+// truth so the subscription tracker can recognize these by name even when a charge
+// lands in another category (e.g. a bank that tags an Apple bill as "Other").
+// Note APPLE billing descriptors vary across banks — "APPLE.COM BILL 866-..." and
+// "APPLE COM BILL CUPERTINO CA" — so the Apple pattern tolerates the dot/slash/space.
+export const SUBSCRIPTION_RE = /STEAM ?GAMES|STEAMGAMES|STEAMPOWERED|APPLE[ .]?COM[ \/]?BILL|APPLE MEDIA|ITUNES|CLAUDE|ANTHROPIC|OPENAI|CHATGPT|LINKEDIN|RESUME\.CO|CCLEANER|AMAZON PRIME|PRIME VIDEO|NETFLIX|SPOTIFY|\bHULU\b|DISNEY ?PLUS|DISNEY\+|\bHBO\b|PARAMOUNT\+|PEACOCK|YOUTUBE ?PREM|YOUTUBE ?TV|AUDIBLE|ADOBE|MICROSOFT 365|OFFICE 365|DROPBOX|NOTION|CANVA|PATREON|SUBSTACK|\bNYT\b|\bWSJ\b|TWITCH|NORDVPN|EXPRESSVPN|1PASSWORD|LASTPASS|GITHUB|GOOGLE ONE|ICLOUD|DASHPASS/;
+
 const RULES: Array<[RegExp, string]> = [
  [/PAYROLL|DIRECT DEP|DIR DEP|IL STATE UNIV ACH|INTEREST PAID|IRS TREAS|TAX REF|KASASA ATM REFUND|ACCTVERIFY 840|VSA RTN/, 'Income & Refunds'],
  // Credit card payments: issuer names + generic phrasing across banks.
@@ -19,7 +27,7 @@ const RULES: Array<[RegExp, string]> = [
  [/IMPULSE VAPE|SMOKERS DEN|\bVAPE\b|TOBACCO|SMOKE SHOP|\bCIGAR\b/, 'Vape & Tobacco'],
  [/SUNNY AND REDS|BLUE BELL CLUB|THE VAULT|SIX STRINGS|THE ZONE 24|WESTERN TAP|LIL BEAVER|PUB 2|707 LIQUORS|LUCKY SEVENS|\bBAR\b|TAVERN|\bPUB\b|BREWERY|BREWING|\bLIQUOR\b|WINE ?& ?SPIRITS|NIGHTCLUB|\bLOUNGE\b|SALOON/, 'Bars & Nightlife'],
  [/VITAMIN SHOPPE|\bCVS\b|WALGREENS|RITE AID|SAV-MOR|SPRINGFIELD CLINIC|DENTAL|DENTIST|AMERICA S BEST|PHARMACY|\bCLINIC\b|HOSPITAL|\bMEDICAL\b|URGENT CARE|LABCORP|QUEST DIAG|\bGOODRX\b|OPTOMETR/, 'Health & Pharmacy'],
- [/STEAM ?GAMES|STEAMGAMES|STEAMPOWERED|APPLE\.COM\/BILL|ITUNES|CLAUDE|ANTHROPIC|OPENAI|CHATGPT|LINKEDIN|RESUME\.CO|CCLEANER|AMAZON PRIME|PRIME VIDEO|NETFLIX|SPOTIFY|\bHULU\b|DISNEY ?PLUS|DISNEY\+|\bHBO\b|PARAMOUNT\+|PEACOCK|YOUTUBE ?PREM|YOUTUBE ?TV|AUDIBLE|ADOBE|MICROSOFT 365|OFFICE 365|DROPBOX|NOTION|CANVA|PATREON|SUBSTACK|\bNYT\b|\bWSJ\b|TWITCH|NORDVPN|EXPRESSVPN|1PASSWORD|LASTPASS|GITHUB|GOOGLE ONE|ICLOUD|DASHPASS/, 'Subscriptions & Digital'],
+ [SUBSCRIPTION_RE, 'Subscriptions & Digital'],
  [/MCDONALD|DAVES HOT CHICKEN|TACO BELL|DAIRY QUEEN|COLDSTONE|DENNYS|DADDIOS|POTRILLOS|MCALISTER|DOMINO|PANDA EXPRESS|FLINGERS|FAT JACKS|FARMERS STATION|PEGGY KINNANES|VINES ON CLARK|SHAKE SHACK|HAWG DINER|SEOUL MAMA|CHIPOTLE|RAISING CANES|JIMMY JOHNS|TRES COMPADRES|ARV BURGERS|HEATERZ|DOORDASH|UBER ?EATS|GRUBHUB|POSTMATES|SEAMLESS|CANTEEN VENDING|\bTST\b|STARBUCKS|SUBWAY|WENDY|BURGER KING|\bKFC\b|POPEYES|\bPIZZA\b|PAPA JOHN|OLIVE GARDEN|APPLEBEE|\bIHOP\b|DUNKIN|CHICK-FIL-A|PANERA|FIVE GUYS|CULVERS|\bSONIC\b|ARBYS|JACK IN THE BOX|WHATABURGER|IN-?N-?OUT|QDOBA|\bMOES\b|JERSEY MIKE|FIREHOUSE|SWEETGREEN|\bCAVA\b|RESTAURANT|\bGRILL\b|\bCAFE\b|COFFEE|TAQUERIA|\bDINER\b|BISTRO|EATERY|STEAKHOUSE|\bBBQ\b|\bSUSHI\b|RAMEN/, 'Dining & Fast Food'],
  [/CASEYS|FAST STOP|AYERCO|ARLINGTON MART|CIRCLE K|PHILLIPS 66|AMITY FOOD MART|\bSHELL\b|\bEXXON\b|\bMOBIL\b|CHEVRON|TEXACO|SUNOCO|VALERO|CITGO|CONOCO|MARATHON|SPEEDWAY|QUIKTRIP|\bWAWA\b|SHEETZ|RACETRAC|\bKWIK\b|\bLOVES\b|PILOT|FLYING J|7-?ELEVEN|\bBP\b|\bFUEL\b|\bGAS\b/, 'Gas & Convenience'],
  [/ALDI|JEWEL OSCO|SCHNUCKS|WAL-?MART|WM SUPERCENTER|WALMART|DOLLAR.GENERAL|DOLLAR TREE|FAMILY DOLLAR|KROGER|\bTARGET\b|COSTCO|SAMS CLUB|WHOLE FOODS|TRADER JOE|PUBLIX|SAFEWAY|MEIJER|FOOD LION|\bHEB\b|H-E-B|WEGMANS|SPROUTS|STOP ?& ?SHOP|HARRIS TEETER|WINCO|\bVONS\b|RALPHS|ALBERTSONS|\bGROCERY\b|SUPERMARKET/, 'Groceries & Household'],
@@ -28,6 +36,13 @@ const RULES: Array<[RegExp, string]> = [
  [/VENMO|CASH ?APP|\bZELLE\b|PAYPAL|PHTFRDDA|PHONE TFR|APPLE CASH/, 'P2P & Transfers']
 ];
 export const ALL_CATS = ['Rent & Housing','Loan Payments','P2P & Transfers','Education','Credit Card Payments','Shopping','Groceries & Household','Legal & Court','Dining & Fast Food','Insurance','Utilities & Bills','Gas & Convenience','Entertainment','Savings & Investments','Subscriptions & Digital','Health & Pharmacy','Gym & Fitness','Auto','Cash Withdrawals','Vape & Tobacco','Bars & Nightlife','Personal Care','Fees','Taxes','Other','Income & Refunds'];
+
+// "Money movement", not consumption: paying down debt, moving cash to savings/
+// investments, or transferring between your own accounts. These are excluded from
+// spending totals, the spending breakdown, and the advisor's needs/wants ratios so
+// a one-time loan payoff or a transfer to savings doesn't read as "spending".
+export const MONEY_MOVEMENT = new Set(['Loan Payments', 'Credit Card Payments', 'Savings & Investments', 'P2P & Transfers']);
+export const isMovement = (cat: string) => MONEY_MOVEMENT.has(cat);
 
 // ---- Dynamic classification via Plaid's own categorization ----
 // Plaid tags every transaction with a personal_finance_category (primary + detailed).
