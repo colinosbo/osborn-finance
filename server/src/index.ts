@@ -18,9 +18,10 @@ import { Billing, PLAN_PRICES, parseStripeEvent, verifyStripeSignature, fetchSub
 import { decrypt } from './crypto.js';
 import { buildReport, buildRangeReport, buildMonthReport, buildWindowReport, buildInvestments, CADENCES, type Cadence } from './reports.js';
 import { detectRecurring } from './recurring.js';
-import { projectGoals } from './goals.js';
 import { buildDebtPlan } from './debt.js';
 import { detectRefunds, withoutRefunds } from './refunds.js';
+import { detectTransfers, withoutTransfers } from './transfers.js';
+
 
 // Resolve a request's time window to [from (exclusive), to (inclusive)]. Accepts an
 // explicit calendar month (from/to) or a rolling day-window (days), anchored on today.
@@ -153,7 +154,9 @@ export async function buildApp(store: Store) {
       // to our tenant/authority; issuer validation rejects validly-signed tokens
       // minted for our audience by any other tenant on a multi-tenant key set.
       const { payload } = await jwtVerify(token, jwks, { audience: cfg.entra.audience, issuer: cfg.entra.issuer });
-      const sub = String(payload.sub), email = String(payload.email || payload.preferred_username || sub + '@entra.local');
+      const sub = String(payload.sub);
+      // Auth0 puts email in a namespaced custom claim; Entra uses bare 'email'.
+      const email = String(payload['https://covisor.app/email'] || payload.email || payload.preferred_username || sub + '@auth0.local');
       (req as never as { user: User }).user = await store.getOrCreateUserBySub(sub, email);
       return next();
     } catch {
@@ -162,18 +165,34 @@ export async function buildApp(store: Store) {
   });
   const u = (req: express.Request): User => (req as never as { user: User }).user;
 
+  // SINGLE SOURCE OF TRUTH for any figure that states overall income, spending, or
+  // net change. Internal-transfer pairs and refunded purchases are netted out here.
+  // EVERY endpoint that reports income / spend / net MUST source its tx from here.
+  const financialsTx = async (userId: string, accounts?: string[]) => {
+    let tx = await store.allTx(userId);
+    if (accounts?.length) tx = tx.filter(t => t.account != null && accounts.includes(t.account));
+    return withoutTransfers(withoutRefunds(tx));
+  };
+
+  // Parse comma-separated account names from a query param (e.g. ?accounts=Checking,Savings).
+  const parseAccounts = (q: Record<string, unknown>): string[] | undefined => {
+    const a = q.accounts;
+    if (typeof a !== 'string' || !a.trim()) return undefined;
+    const parts = a.split(',').map(s => s.trim()).filter(Boolean);
+    return parts.length ? parts : undefined;
+  };
+
   // L2: the anonymous probe reveals nothing about configuration.
   app.get('/api/health', (_q, res) => res.json({ ok: true }));
   // Detailed mode is gated behind auth (not in the middleware skip list above).
-  app.get('/api/health/details', (_q, res) => res.json({ ok: true, mode: { db: !!cfg.databaseUrl, plaid: cfg.plaid.mock ? 'mock' : cfg.plaid.env, stripe: cfg.stripe.mock ? 'mock' : 'live', auth: cfg.authMode } }));
-  app.get('/api/plans', (_q, res) => res.json(Object.entries(PLAN_PRICES).map(([id, p]) => ({ id, label: p.label, amountCents: p.amount }))));
+app.get('/api/plans', (_q, res) => res.json(Object.entries(PLAN_PRICES).map(([id, p]) => ({ id, label: p.label, amountCents: p.amount }))));
   app.get('/api/me', async (req, res) => {
     const items = await store.listItems(u(req).id);
     const sub = await store.getSubscription(u(req).id);
     res.json({ ...u(req), items: items.map(i => ({ id: i.id, institution: i.institution_name, status: i.status })), subscription: sub });
   });
   app.get('/api/me/export', async (req, res) => {
-    res.json({ user: u(req), transactions: await store.allTx(u(req).id), accounts: await store.listAccounts(u(req).id), overrides: await store.getOverrides(u(req).id), goals: await store.listGoals(u(req).id) });
+    res.json({ user: u(req), transactions: await store.allTx(u(req).id), accounts: await store.listAccounts(u(req).id), overrides: await store.getOverrides(u(req).id) });
   });
   app.delete('/api/me', async (req, res) => {
     for (const it of await store.listItems(u(req).id)) { try { await Plaid.removeItem(decrypt(it.access_token_ciphertext)); } catch { /* item may be gone */ } }
@@ -230,7 +249,7 @@ export async function buildApp(store: Store) {
       const merch = merchant(raw);
       let category = classify(raw, amt);
       if (amt < 0 && overrides[merch]) category = overrides[merch];
-      out.push({ user_id: u(req).id, date, name: cleanDesc(raw), merchant: merch, amount: amt, balance: map.bal >= 0 ? parseAmtStr(r[map.bal]) : null, category, source: 'csv', plaid_transaction_id: null, item_id: null });
+      out.push({ user_id: u(req).id, date, name: cleanDesc(raw), merchant: merch, amount: amt, balance: map.bal >= 0 ? parseAmtStr(r[map.bal]) : null, category, source: 'csv', plaid_transaction_id: null, item_id: null, account: map.acct >= 0 ? (String(r[map.acct] ?? '').trim() || null) : null });
     }
     const inserted = await store.insertTx(out);
     await store.audit(u(req).id, 'csv_import', `${inserted} rows`, ipHash(req));
@@ -247,15 +266,28 @@ export async function buildApp(store: Store) {
     let from: string | undefined, to: string | undefined;
     if (q.from) { from = q.from; to = q.to; }
     else { const days = q.days || 0; from = days ? new Date(Date.parse(today) - days * 864e5).toISOString().slice(0, 10) : undefined; }
+    const accounts = q.accounts ? q.accounts.split(',').map((s: string) => s.trim()).filter(Boolean) : undefined;
     const r = await store.listTx(u(req).id, {
       from, to, cat: q.cat, flow: q.flow, search: q.q,
       limit: q.limit || 25, offset: q.offset || 0,
-      sort: q.sort || 'date', dir: q.dir || 'desc'
+      sort: q.sort || 'date', dir: q.dir || 'desc', accounts
     });
-    // Tag refunded purchases / their refunds so the ledger can mark them as netted
-    // out of totals. Roles are computed over the full set (pairs can cross pages).
-    const { roleById } = detectRefunds(await store.allTx(u(req).id));
-    const rows = roleById.size ? r.rows.map(t => roleById.has(t.id) ? { ...t, refund: roleById.get(t.id) } : t) : r.rows;
+    // Tag refunded purchases / their refunds AND internal-transfer pairs so the
+    // ledger can mark them as netted out of totals. Roles are computed over the
+    // full set (pairs can cross pages).
+    const all = await store.allTx(u(req).id);
+    const { roleById } = detectRefunds(all);
+    const { roleById: transferRole } = detectTransfers(all);
+    const rows = (roleById.size || transferRole.size)
+      ? r.rows.map(t => {
+          let o = t;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          if (roleById.has(t.id)) o = { ...o, refund: roleById.get(t.id) } as any;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          if (transferRole.has(t.id)) o = { ...o, transfer: transferRole.get(t.id) } as any;
+          return o;
+        })
+      : r.rows;
     res.json({ ...r, rows });
   });
   app.post('/api/transactions/recategorize', async (req, res) => {
@@ -274,14 +306,25 @@ export async function buildApp(store: Store) {
     const overrides = await store.getOverrides(userId);
     const updates: { id: string; category: string }[] = [];
     for (const t of txs) {
-      let cat: string;
-      if (t.amount > 0) cat = 'Income & Refunds';
-      else { cat = classify(t.name, t.amount); if (overrides[t.merchant]) cat = overrides[t.merchant]; }
+      // classify() now splits inflows into Income vs Refunds too, so run it for every
+      // row (an existing manual override still wins). Pinned transactions were set by
+      // the user directly from the ledger — skip them so a bulk reclassify never
+      // overwrites a deliberate manual choice. (BUG-2 fix)
+      if (t.pinned) continue;
+      let cat = classify(t.name, t.amount);
+      if (overrides[t.merchant]) cat = overrides[t.merchant];
       if (cat !== t.category) updates.push({ id: t.id, category: cat });
     }
     const n = await store.setTxCategories(userId, updates);
     await store.audit(userId, 'reclassify', `${n} txns`, ipHash(req));
     res.json({ updated: n, total: txs.length });
+  });
+  // Pin a single transaction to a specific category so bulk reclassify won't overwrite it.
+  app.patch('/api/transactions/:id', async (req, res) => {
+    const { category } = req.body || {};
+    if (!category || !ALL_CATS.includes(category)) return res.status(400).json({ error: 'invalid category' });
+    const ok = await store.pinTx(u(req).id, req.params.id, category);
+    res.json({ ok });
   });
   app.get('/api/categories', (_q, res) => res.json(ALL_CATS));
   // Demo request (lead capture from the "Book a demo" button). Validates and records
@@ -291,7 +334,6 @@ export async function buildApp(store: Store) {
     if (!v.ok) return res.status(400).json({ error: v.error });
     const d = v.data;
     const summary = `${d.firstName} ${d.lastName} <${d.email}>${d.phone ? ' · ' + d.phone : ''}${d.company ? ' · ' + d.company : ''}${d.comments ? ' · ' + d.comments : ''}`.slice(0, 800);
-    console.log('[demo-request]', summary);
     await store.audit(null, 'demo_request', summary, ipHash(req));
     res.json({ ok: true });
   });
@@ -302,6 +344,13 @@ export async function buildApp(store: Store) {
     const tx = await store.allTx(u(req).id);
     const used = new Set(tx.map(t => t.category));
     res.json(ALL_CATS.filter(c => used.has(c)));
+  });
+  // Distinct account names the user has transactions from, sorted alphabetically.
+  // Drives the account filter dropdowns / checkboxes across all pages.
+  app.get('/api/tx-accounts', async (req, res) => {
+    const tx = await store.allTx(u(req).id);
+    const names = [...new Set(tx.map(t => t.account).filter((a): a is string => a != null && a.length > 0))].sort();
+    res.json(names);
   });
   // Months the user actually has activity in, most recent first, capped to the
   // last 12. A month is only listed if at least one transaction falls inside that
@@ -332,15 +381,14 @@ export async function buildApp(store: Store) {
   // ---- summary + advisor (F7/F8/F10) ----
   app.get('/api/summary', async (req, res) => {
     // Net out refunded purchases so a buy-then-return doesn't inflate money in/out.
-    const tx = withoutRefunds(await store.allTx(u(req).id));
+    const tx = await financialsTx(u(req).id, parseAccounts(req.query as Record<string, unknown>));
     const { from, to } = rangeWindow(req.query, new Date().toISOString().slice(0, 10), 365);
     res.json(summarize(tx, from, to));
   });
   app.get('/api/advisor', async (req, res) => {
-    const tx = withoutRefunds(await store.allTx(u(req).id));
-    const goals = await store.listGoals(u(req).id);
+    const tx = await financialsTx(u(req).id, parseAccounts(req.query as Record<string, unknown>));
     const { from, to } = rangeWindow(req.query, new Date().toISOString().slice(0, 10), 365);
-    res.json(buildAdvisor(tx, goals, from, to));
+    res.json(buildAdvisor(tx, from, to));
   });
 
   // ---- accounts (INC-2) ----
@@ -352,7 +400,7 @@ export async function buildApp(store: Store) {
   app.get('/api/debt', async (req, res) => {
     const extra = req.query.extra != null ? Math.max(0, Math.min(1e7, +req.query.extra || 0)) : undefined;
     const accts = await store.listAccounts(u(req).id);
-    const tx = await store.allTx(u(req).id);
+    const tx = await financialsTx(u(req).id);
     res.json(buildDebtPlan(accts, tx, extra));
   });
 
@@ -361,71 +409,10 @@ export async function buildApp(store: Store) {
     res.json(detectRecurring(await store.allTx(u(req).id)));
   });
 
-  // A linked credit/loan account is a debt to pay DOWN, not money saved.
-  const isLiabilityType = (t?: string) => /credit|loan|mortgage|student|line of credit/i.test(t || '');
-
-  // ---- savings & debt-payoff goals: on-pace projection from net cash flow ----
-  app.get('/api/goals', async (req, res) => {
-    const goals = await store.listGoals(u(req).id);
-    const accts = await store.listAccounts(u(req).id);
-    const acctById = Object.fromEntries(accts.map(a => [a.id, a]));
-    // Linked goals auto-sync from the account's live balance.
-    // savings: saved = balance. payoff: saved = how much of the debt is paid down (start - current).
-    for (const g of goals) if (g.account_id && acctById[g.account_id]) {
-      const bal = Math.max(0, acctById[g.account_id].current_balance || 0);
-      g.saved_amount = g.kind === 'payoff' && g.start_balance != null ? Math.max(0, g.start_balance - bal) : bal;
-    }
-    const out = projectGoals(goals, withoutRefunds(await store.allTx(u(req).id)));
-    out.goals = out.goals.map(gv => ({
-      ...gv,
-      account: gv.account_id && acctById[gv.account_id]
-        ? { id: gv.account_id, name: acctById[gv.account_id].name, mask: acctById[gv.account_id].mask }
-        : null
-    }));
-    res.json(out);
-  });
-  app.post('/api/goals', async (req, res) => {
-    const v = parse(schemas.goalCreate, req.body);
-    if (!v.ok) return res.status(400).json({ error: v.error });
-    // Derive the goal kind from the linked account (server is authoritative).
-    let kind: 'savings' | 'payoff' = 'savings';
-    let start_balance: number | null = null;
-    let target = v.data.target_amount;
-    let saved = v.data.saved_amount ?? 0;
-    if (v.data.account_id) {
-      const acct = (await store.listAccounts(u(req).id)).find(a => a.id === v.data.account_id);
-      if (acct && isLiabilityType(acct.type)) {
-        kind = 'payoff';
-        start_balance = Math.max(0, acct.current_balance || 0);
-        target = start_balance; // paying the whole balance off
-        saved = 0;              // computed live from the balance
-      }
-    }
-    const g = await store.createGoal({
-      user_id: u(req).id, name: v.data.name, target_amount: target,
-      saved_amount: saved, target_date: v.data.target_date ?? null,
-      color: v.data.color ?? '#7c3aed', account_id: v.data.account_id ?? null,
-      kind, start_balance
-    });
-    await store.audit(u(req).id, 'goal_created', g.name, ipHash(req));
-    res.json(g);
-  });
-  app.patch('/api/goals/:id', async (req, res) => {
-    const v = parse(schemas.goalUpdate, req.body);
-    if (!v.ok) return res.status(400).json({ error: v.error });
-    const g = await store.updateGoal(u(req).id, req.params.id, v.data);
-    if (!g) return res.status(404).json({ error: 'goal not found' });
-    res.json(g);
-  });
-  app.delete('/api/goals/:id', async (req, res) => {
-    if (!(await store.deleteGoal(u(req).id, req.params.id))) return res.status(404).json({ error: 'goal not found' });
-    res.json({ deleted: true });
-  });
-
   // ---- reports: a calendar month (?from=&to=, like the rest of the app), or an
   // arbitrary day range (?days=30) as a fallback, generated on the spot ----
   app.get('/api/reports', async (req, res) => {
-    const tx = withoutRefunds(await store.allTx(u(req).id));
+    const tx = await financialsTx(u(req).id, parseAccounts(req.query as Record<string, unknown>));
     const dre = /^\d{4}-\d{2}-\d{2}$/;
     const from = typeof req.query.from === 'string' && dre.test(req.query.from) ? req.query.from : '';
     const to = typeof req.query.to === 'string' && dre.test(req.query.to) ? req.query.to : '';
@@ -459,14 +446,14 @@ export async function buildApp(store: Store) {
     if (!CADENCES.includes(cadence)) return res.status(400).json({ error: 'unknown cadence' });
     const v = parse(schemas.reportQuery, req.query);
     if (!v.ok) return res.status(400).json({ error: v.error });
-    const tx = withoutRefunds(await store.allTx(u(req).id));
+    const tx = await financialsTx(u(req).id, parseAccounts(req.query as Record<string, unknown>));
     res.json(buildReport(tx, cadence, v.data.offset || 0));
   });
 
   // ---- Plaid (F3, P1-P5) ----
   // SEC-1: per-user limit on bank linking (rare action, but abuse is not). Kept
   // generous enough that normal retries during setup don't trip it.
-  const linkLimiter = rateLimit({ windowMs: 60_000, max: 20, keyGenerator: (req) => (req as never as { user?: User }).user?.id || req.ip || 'anon' });
+  const linkLimiter = rateLimit({ windowMs: 60_000, max: 5, keyGenerator: (req) => (req as never as { user?: User }).user?.id || req.ip || 'anon' });
   app.post('/api/plaid/link-token', linkLimiter, async (req, res) => {
     const limit = PLAN_LIMITS[u(req).plan]?.items ?? 0;
     if (await store.countItems(u(req).id) >= limit)
@@ -562,9 +549,19 @@ if (isMain) {
   // throws) must never crash the whole process. Node terminates on unhandled
   // rejections by default; log and continue instead.
   process.on('unhandledRejection', (reason) => console.error('unhandledRejection:', reason instanceof Error ? reason.message : reason));
-  process.on('uncaughtException', (err) => console.error('uncaughtException:', err?.message || err));
+  process.on('uncaughtException', (err) => {
+    console.error('uncaughtException:', err);
+  });
 
-  const store = await makeStore();
+  let store: Store;
+  try {
+    console.log(`[startup] connecting to store (DATABASE_URL set: ${!!process.env.DATABASE_URL})...`);
+    store = await makeStore();
+    console.log('[startup] store ready');
+  } catch (err) {
+    console.log('FATAL startup: makeStore failed:', err instanceof Error ? err.stack : String(err));
+    process.exit(1);
+  }
   const app = await buildApp(store);
   app.listen(cfg.port, () => console.log(`Covisor API on :${cfg.port} (auth=${cfg.authMode}, plaid=${cfg.plaid.mock ? 'mock' : cfg.plaid.env}, stripe=${cfg.stripe.mock ? 'mock' : 'live'})`));
 

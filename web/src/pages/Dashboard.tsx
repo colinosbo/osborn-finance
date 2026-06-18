@@ -65,7 +65,13 @@ export default function Dashboard() {
   const [s, setS] = useState<Summary | null>(null);
   const [me, setMe] = useState<Me | null>(null);
   const [err, setErr] = useState('');
-  useEffect(() => { api<Summary>(`/api/summary?${rangeQS(range)}`).then(setS).catch(e => setErr(e.message)); }, [range]);
+  const [accounts, setAccounts] = useState<string[]>([]);
+  const [acctFilter, setAcctFilter] = useState('');
+  useEffect(() => { api<string[]>('/api/tx-accounts').then(setAccounts).catch(() => {}); }, []);
+  useEffect(() => {
+    const qs = rangeQS(range) + (acctFilter ? `&accounts=${encodeURIComponent(acctFilter)}` : '');
+    api<Summary>(`/api/summary?${qs}`).then(setS).catch(e => setErr(e.message));
+  }, [range, acctFilter]);
   useEffect(() => { api<Me>('/api/me').then(setMe).catch(() => setMe({ plan: 'free', items: [] })); }, []);
   if (err) return <div className="empty">Error: {err}</div>;
   if (!s || !me) return <div className="empty">Loading…</div>;
@@ -79,6 +85,12 @@ export default function Dashboard() {
       <div className="sec-sub">{s.range.count ? `${s.range.count} transactions · ${s.range.from} to ${s.range.to}` : 'No activity in the selected range'}</div>
       <div className="controls">
         <RangePicker value={range.value} onChange={setRange} />
+        {accounts.length > 1 && (
+          <select value={acctFilter} onChange={e => setAcctFilter(e.target.value)}>
+            <option value="">All accounts</option>
+            {accounts.map(a => <option key={a} value={a}>{a}</option>)}
+          </select>
+        )}
       </div>
       {s.range.count === 0 ? (
         <EmptyState icon="dashboard" eyebrow="Overview" title="No activity in this range" sub="You have transactions, just none in this window. Pick a different range or month above." cta={null} secondary={null} />

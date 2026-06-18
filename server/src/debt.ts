@@ -3,10 +3,27 @@
 // (net cash flow), and simulates a payoff plan: avalanche (highest APR first) vs
 // snowball (smallest balance first), plus a minimums-only baseline for comparison.
 import type { Tx, Account } from './store.js';
-import { monthlyNetCashFlow } from './goals.js';
+import { isMovement, REFUND_CAT } from './classifier.js';
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
+const DAY = 864e5;
 const isLiability = (t?: string) => /credit|loan|mortgage|student|line of credit/i.test(t || '');
+const shiftDays = (iso: string, d: number) => { const x = new Date(iso + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + d); return x.toISOString().slice(0, 10); };
+
+// Average monthly net cash flow (income − spending) over the trailing ~6 months of
+// history — the money realistically available to put toward debt. Money movement (debt
+// payoff, transfers, saving) and refunds are excluded so a one-time payoff or a return
+// never produces a misleading negative. (Previously lived in goals.ts.)
+export function monthlyNetCashFlow(tx: Tx[]): number {
+  if (!tx.length) return 0;
+  const latest = tx[tx.length - 1].date, earliest = tx[0].date;
+  const spanDays = (Date.parse(latest) - Date.parse(earliest)) / DAY;
+  const windowDays = Math.min(183, Math.max(30, Math.ceil(spanDays) || 30));
+  const cutoff = shiftDays(latest, -windowDays);
+  const net = tx.filter(t => t.date > cutoff).reduce((s, t) =>
+    s + (((t.amount < 0 && isMovement(t.category)) || (t.amount > 0 && t.category === REFUND_CAT)) ? 0 : t.amount), 0);
+  return r2(net / Math.max(1, windowDays / 30.44));
+}
 
 // Estimated APR by account type (clearly an estimate, shown to the user).
 function estApr(type: string): number {

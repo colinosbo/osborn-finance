@@ -1,11 +1,11 @@
-import { Routes, Route, NavLink, Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { Routes, Route, NavLink, Link, useLocation, useNavigate } from 'react-router-dom';
 import { useState, useEffect } from 'react';
+import { useAuth0 } from '@auth0/auth0-react';
 import Dashboard from './pages/Dashboard';
 import Accounts from './pages/Accounts';
 import Ledger from './pages/Ledger';
 import Advisor from './pages/Advisor';
 import Budgets from './pages/Budgets';
-import Goals from './pages/Goals';
 import Reports from './pages/Reports';
 import Plans from './pages/Plans';
 import Settings from './pages/Settings';
@@ -14,7 +14,7 @@ import Subscriptions from './pages/Subscriptions';
 import DemoRequest from './pages/DemoRequest';
 import SignIn from './pages/SignIn';
 import SignUp from './pages/SignUp';
-import { isSignedIn, signOut, useAuth } from './auth';
+import { setTokenGetter, setUserEmailGetter, setAuth0Ready } from './api';
 import { applyMotionPref } from './prefs';
 import { Icon, type IconName } from './icons';
 
@@ -25,7 +25,6 @@ const TABS: { to: string; ico: IconName; label: string }[] = [
   { to: '/accounts', ico: 'bank', label: 'Accounts' },
   { to: '/ledger', ico: 'ledger', label: 'Ledger' },
   { to: '/advisor', ico: 'advisor', label: 'Advisor' },
-  { to: '/goals', ico: 'goal', label: 'Goals' },
   { to: '/reports', ico: 'reports', label: 'Reports' },
   { to: '/subscriptions', ico: 'subscriptions', label: 'Subscriptions' },
   { to: '/plans', ico: 'plans', label: 'Plans' }
@@ -38,43 +37,47 @@ const DRAWER_LINKS: { to: string; ico: IconName; label: string }[] = [
   { to: '/settings', ico: 'settings', label: 'Settings' }
 ];
 
-// Gate a route behind auth (stub auth for now). Defaults to /signin — which links to
-// "Create an account" — with a next= return path. Pass to="signup" to land on sign-up.
-function RequireAuth({ to, children }: { to: 'signin' | 'signup'; children: JSX.Element }) {
+// Gate a route behind Auth0. While loading, render nothing; when unauthenticated,
+// trigger loginWithRedirect so the Auth0 Universal Login page takes over.
+function RequireAuth({ children }: { children: JSX.Element }) {
+  const { isAuthenticated, isLoading, loginWithRedirect } = useAuth0();
   const loc = useLocation();
-  if (!isSignedIn()) return <Navigate to={`/${to}?next=${encodeURIComponent(loc.pathname)}`} replace />;
+  useEffect(() => {
+    if (!isLoading && !isAuthenticated) {
+      loginWithRedirect({ appState: { returnTo: loc.pathname } });
+    }
+  }, [isLoading, isAuthenticated, loc.pathname]);
+  if (isLoading || !isAuthenticated) return null;
   return children;
 }
 
-// Nav sign-in/out control. Reflects the (stub) auth state and lets you reset the flow
-// while testing. Signing out returns to the dashboard.
+// Nav sign-in/out control. Reflects Auth0 state.
 function AuthControl({ onNavigate }: { onNavigate?: () => void }) {
-  const { signedIn, name, email } = useAuth();
-  const nav = useNavigate();
+  const { isAuthenticated, user, loginWithRedirect, logout } = useAuth0();
   const loc = useLocation();
-  if (signedIn) {
+  if (isAuthenticated) {
     return (
       <button
         className="navtab authbtn"
-        title={`Signed in as ${name || email || 'your account'} — click to sign out`}
-        onClick={() => { signOut(); onNavigate?.(); nav('/'); }}
+        title={`Signed in as ${user?.name || user?.email || 'your account'} — click to sign out`}
+        onClick={() => { onNavigate?.(); logout({ logoutParams: { returnTo: window.location.origin } }); }}
       >
         <span className="ico"><Icon name="profile" /></span>Sign out
       </button>
     );
   }
   return (
-    <NavLink
-      to={`/signin?next=${encodeURIComponent(loc.pathname)}`}
-      onClick={onNavigate}
-      className={({ isActive }) => 'navtab' + (isActive ? ' active' : '')}
+    <button
+      className="navtab"
+      onClick={() => { onNavigate?.(); loginWithRedirect({ appState: { returnTo: loc.pathname } }); }}
     >
       <span className="ico"><Icon name="profile" /></span>Sign in
-    </NavLink>
+    </button>
   );
 }
 
 export default function App() {
+  const { getAccessTokenSilently, isAuthenticated, isLoading, user } = useAuth0();
   const [toast, setToastMsg] = useState('');
   const showToast: Toast = (m) => { setToastMsg(m); setTimeout(() => setToastMsg(''), 3200); };
   // theme: steel (default) | light | purple; persisted per device.
@@ -86,6 +89,15 @@ export default function App() {
   // mobile slide-out nav drawer
   const [menuOpen, setMenuOpen] = useState(false);
   const closeMenu = () => setMenuOpen(false);
+
+  // Wire Auth0 token and email into the api() client.
+  useEffect(() => {
+    if (isLoading) return; // wait until Auth0 has finished restoring the session
+    setAuth0Ready(true);
+    setTokenGetter(isAuthenticated ? () => getAccessTokenSilently() : null);
+    setUserEmailGetter(isAuthenticated ? () => user?.email || null : null);
+  }, [isLoading, isAuthenticated, getAccessTokenSilently, user?.email]);
+
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('of_theme', theme);
@@ -150,11 +162,10 @@ export default function App() {
           <Route path="/ledger" element={<Ledger toast={showToast} />} />
           <Route path="/advisor" element={<Advisor />} />
           <Route path="/budgets" element={<Budgets />} />
-          <Route path="/goals" element={<Goals toast={showToast} />} />
           <Route path="/reports" element={<Reports toast={showToast} />} />
           <Route path="/subscriptions" element={<Subscriptions />} />
-          <Route path="/demo" element={<RequireAuth to="signin"><DemoRequest toast={showToast} /></RequireAuth>} />
-          <Route path="/plans" element={<RequireAuth to="signin"><Plans toast={showToast} /></RequireAuth>} />
+          <Route path="/demo" element={<RequireAuth><DemoRequest toast={showToast} /></RequireAuth>} />
+          <Route path="/plans" element={<RequireAuth><Plans toast={showToast} /></RequireAuth>} />
           <Route path="/profile" element={<Profile toast={showToast} />} />
           <Route path="/settings" element={<Settings toast={showToast} theme={theme} setTheme={setTheme} />} />
           <Route path="/signin" element={<SignIn />} />

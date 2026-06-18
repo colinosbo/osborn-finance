@@ -1,0 +1,12 @@
+{
+  "navigationFallback": {
+    "rewrite": "/index.html",
+    "exclude": ["/assets/*", "/favicon.ico"]
+  },
+  "routes": [
+    {
+      "route": "/api/*",
+      "rewrite": "https://covisor-api.nicesea-2474b3f8.northcentralus.azurecontainerapps.io/api/*"
+    }
+  ]
+}

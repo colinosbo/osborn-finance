@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, fmt, fmt0, color, donutData } from '../api';
 import { generateReportPDF } from '../pdf';
 import type { Toast } from '../App';
@@ -6,8 +6,8 @@ import EmptyState from '../EmptyState';
 import RangePicker, { DEFAULT_RANGE, rangeQS, type RangeOpt } from '../RangePicker';
 import { buildFacts } from '../facts';
 
-interface Kpi { value: number; prev: number; delta: number; pct: number | null }
-interface Cat { name: string; total: number; count: number; prev: number; delta: number; share: number }
+interface Kpi { value: number; prev: number; delta: number | null; pct: number | null }
+interface Cat { name: string; total: number; count: number; prev: number; delta: number | null; share: number }
 interface Report {
   month?: string;
   period: { from: string; to: string; label: string; days: number; grain: string };
@@ -85,6 +85,8 @@ function Donut({ cats, total }: { cats: Cat[]; total: number }) {
 }
 
 function Delta({ k, goodUp, rate }: { k: Kpi; goodUp: boolean; rate?: boolean }) {
+  // null delta = no prior-period data; show a dash rather than a misleading "+$X vs prior"
+  if (k.delta == null) return <div className="delta flat">—</div>;
   if (!k.prev && !k.delta) return <div className="delta flat">—</div>;
   const up = k.delta >= 0, good = up === goodUp;
   const txt = rate
@@ -114,19 +116,40 @@ export default function Reports({ toast }: { toast: Toast }) {
   const [rep, setRep] = useState<Report | null>(null);
   const [loading, setLoading] = useState(true);
   const [noData, setNoData] = useState(false);
+  const [accounts, setAccounts] = useState<string[]>([]);
+  // acctSel: which accounts are checked. Initialized to all once /api/tx-accounts loads.
+  const [acctSel, setAcctSel] = useState<Set<string>>(new Set());
+  // Track whether acctSel has been seeded so the effect doesn't fire before load.
+  const acctSeeded = useRef(false);
+
+  useEffect(() => {
+    api<string[]>('/api/tx-accounts').then(names => {
+      setAccounts(names);
+      setAcctSel(new Set(names)); // all checked by default
+      acctSeeded.current = true;
+    }).catch(() => { acctSeeded.current = true; });
+  }, []);
+
+  const toggleAcct = (name: string) =>
+    setAcctSel(prev => { const next = new Set(prev); next.has(name) ? next.delete(name) : next.add(name); return next; });
+  const allChecked = accounts.length === 0 || acctSel.size === accounts.length;
 
   const update = (patch: Partial<RP>) => { const next = { ...rp, ...patch }; setRp(next); saveRP(next); };
   const setSection = (k: keyof Sections) => update({ sections: { ...rp.sections, [k]: !rp.sections[k] } });
   const s = rp.sections;
 
-  const fetchReport = () => {
-    if (!range.from) return;
+  // Comma-separated account names when filtering a subset; empty string = all
+  const acctParam = !allChecked && acctSel.size > 0 ? [...acctSel].sort().join(',') : '';
+
+  const fetchReport = useCallback(() => {
+    if (!range.from) { setLoading(false); return; } // BUG-7 fix: don't leave spinner stuck
     setLoading(true);
-    api<Report>(`/api/reports?${rangeQS(range)}`)
+    const url = `/api/reports?${rangeQS(range)}${acctParam ? `&accounts=${encodeURIComponent(acctParam)}` : ''}`;
+    api<Report>(url)
       .then(r => { setRep(r); setLoading(false); })
       .catch(() => setLoading(false));
-  };
-  useEffect(fetchReport, [range]);
+  }, [range, acctParam]);
+  useEffect(() => { fetchReport(); }, [fetchReport]);
   useEffect(() => {
     api<{ months: string[] }>('/api/tx-months')
       .then(r => { if (!r.months?.length) { setNoData(true); setLoading(false); } })
@@ -245,6 +268,35 @@ export default function Reports({ toast }: { toast: Toast }) {
               </div>
             )}
           </div>
+
+          {/* Account filter panel — only shown when the user has 2+ accounts */}
+          {accounts.length > 1 && (
+            <div className="panel" style={{ padding: '22px 22px 20px', marginTop: 16 }}>
+              <h3 style={{ marginBottom: 2 }}>Accounts</h3>
+              <div className="psub" style={{ marginBottom: 10 }}>Filter this report by account</div>
+              {/* Select/deselect all */}
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, paddingBottom: 8, borderBottom: '1px solid var(--hairline)', marginBottom: 6, cursor: 'pointer', fontSize: 13, fontWeight: 550 }}>
+                <input
+                  type="checkbox"
+                  checked={allChecked}
+                  onChange={() => setAcctSel(allChecked ? new Set() : new Set(accounts))}
+                  style={{ accentColor: 'var(--v600)', width: 14, height: 14 }}
+                />
+                All accounts
+              </label>
+              {accounts.map(a => (
+                <label key={a} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0', cursor: 'pointer', fontSize: 13, color: acctSel.has(a) ? 'var(--ink)' : 'var(--faint)', transition: 'color 0.15s' }}>
+                  <input
+                    type="checkbox"
+                    checked={acctSel.has(a)}
+                    onChange={() => toggleAcct(a)}
+                    style={{ accentColor: 'var(--v600)', width: 14, height: 14, flexShrink: 0 }}
+                  />
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a}</span>
+                </label>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* ── Preview ── */}
@@ -384,7 +436,6 @@ export default function Reports({ toast }: { toast: Toast }) {
                         <div style={{ display: 'grid', gridTemplateColumns: facts.length >= 2 ? '1fr 1fr' : '1fr', gap: 10 }}>
                           {facts.map((f, i) => (
                             <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '11px 13px', border: '1px solid var(--line)', borderRadius: 8, background: 'var(--hairline)' }}>
-                              <span style={{ fontSize: 15, lineHeight: 1.2, flexShrink: 0 }}>{f.icon}</span>
                               <span style={{ fontSize: 12.5, color: 'var(--ink)', lineHeight: 1.5 }}>{f.text}</span>
                             </div>
                           ))}
@@ -398,7 +449,6 @@ export default function Reports({ toast }: { toast: Toast }) {
                     <div style={{ display: 'grid', gridTemplateColumns: rep.insights.tips.length >= 3 ? '1fr 1fr' : '1fr', gap: 12, marginBottom: 18 }}>
                       {rep.insights.tips.map((t, i) => (
                         <div key={i} className="ins-tip">
-                          <div className="ins-tip-ico">{t.icon}</div>
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
                               <div style={{ fontSize: 13, fontWeight: 650, marginBottom: 4 }}>{t.title}</div>
@@ -413,7 +463,7 @@ export default function Reports({ toast }: { toast: Toast }) {
 
                   {/* Disclaimer — bottom */}
                   <div style={{ fontSize: 11, color: 'var(--faint)', lineHeight: 1.6, padding: '9px 12px', border: '1px solid var(--line)', borderRadius: 6 }}>
-                    ⚠ Not financial advice. These observations are generated automatically from your transaction data for informational purposes only. Always consult a qualified financial advisor before making financial decisions.
+                    Not financial advice. These observations are generated automatically from your transaction data for informational purposes only. Always consult a qualified financial advisor before making financial decisions.
                   </div>
                 </div>
               )}

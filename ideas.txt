@@ -8,3 +8,4 @@ Natural language questions ("Where did my money go this month?")
 charge notifications
 investment tracker
 add specific ledger items to specific category
+Total input manuall, total contributions vs total gain vs total amount  period

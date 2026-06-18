@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
+import { Auth0Provider } from '@auth0/auth0-react';
 import App from './App';
 import './styles.css';
 
@@ -25,6 +26,28 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { err
   }
 }
 
+// After Auth0 redirects back, restore the user to the page they were trying to visit.
+const onRedirectCallback = (appState?: { returnTo?: string }) => {
+  window.history.replaceState({}, document.title, appState?.returnTo || window.location.pathname);
+};
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode><ErrorBoundary><BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}><App /></BrowserRouter></ErrorBoundary></React.StrictMode>
+  <React.StrictMode>
+    <ErrorBoundary>
+      <Auth0Provider
+        domain="dev-kfu16sn74pidwzdm.us.auth0.com"
+        clientId="YsCcEqKFeV8F4Zqrj8ZgSlQqrRPdF21m"
+        authorizationParams={{
+          redirect_uri: window.location.origin,
+          audience: 'https://api.covisor.app',
+          scope: 'openid profile email'
+        }}
+        onRedirectCallback={onRedirectCallback}
+      >
+        <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+          <App />
+        </BrowserRouter>
+      </Auth0Provider>
+    </ErrorBoundary>
+  </React.StrictMode>
 );

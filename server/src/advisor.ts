@@ -1,14 +1,13 @@
 // AI Advisor engine: a far richer, still fully-offline analysis over the user's
-// transactions + goals. Produces: a financial-health score with factor breakdown,
+// transactions. Produces: a financial-health score with factor breakdown,
 // a 50/30/20 needs/wants/savings split, period-over-period trends, spending
-// anomalies, "wins", and a goal-aware, prioritized action plan.
+// anomalies, "wins", and a prioritized action plan.
 //
 // Backwards-compatible: still exposes `tips`, `totalSavePerMonth`, `savingsRate`
 // (the original advise() shape) so existing callers/tests keep working.
-import type { Tx, Goal } from './store.js';
+import type { Tx } from './store.js';
 import { detectRecurring } from './recurring.js';
-import { isMovement } from './classifier.js';
-import { projectGoals } from './goals.js';
+import { isMovement, isIncome } from './classifier.js';
 
 const DAY = 864e5;
 const r2 = (n: number) => Math.round(n * 100) / 100;
@@ -33,12 +32,12 @@ function byCat(rows: Tx[]): Record<string, CatAgg> {
   return m;
 }
 
-export interface AdvisorTip { icon: string; title: string; text: string; savePerMonth: number; savePerYear?: number; pinned?: boolean; goalImpact?: string }
+export interface AdvisorTip { icon: string; title: string; text: string; savePerMonth: number; savePerYear?: number; pinned?: boolean }
 export interface ScoreFactor { label: string; status: 'good' | 'ok' | 'warn'; points: number; max: number; detail: string }
 
 // Window is [from (exclusive), to (inclusive)]; the previous window is the same
 // length immediately before it (e.g. last month vs the month before) for trends.
-export function buildAdvisor(tx: Tx[], goals: Goal[], from: string, to: string) {
+export function buildAdvisor(tx: Tx[], from: string, to: string) {
   const cur = tx.filter(t => (!from || t.date > from) && (!to || t.date <= to));
   const windowDays = from && to ? Math.max(1, Math.round((Date.parse(to) - Date.parse(from)) / DAY)) : 0;
   const prevFrom = windowDays ? shift(from, -windowDays) : '';
@@ -48,7 +47,7 @@ export function buildAdvisor(tx: Tx[], goals: Goal[], from: string, to: string) 
   const dayCount = dates.length ? Math.max(1, (Date.parse(dates[dates.length - 1]) - Date.parse(dates[0])) / DAY + 1) : 1;
   const mo = Math.max(1, dayCount / 30.44);
 
-  const income = cur.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
+  const income = cur.filter(isIncome).reduce((s, t) => s + t.amount, 0);
   // Spending = consumption only; money movement (debt payoff, transfers, saving) is a
   // balance-sheet move, not consumption, so it's excluded from spend/net/ratios.
   const spend = Math.abs(cur.filter(t => t.amount < 0 && !isMovement(t.category)).reduce((s, t) => s + t.amount, 0));
@@ -65,7 +64,6 @@ export function buildAdvisor(tx: Tx[], goals: Goal[], from: string, to: string) 
   // inside a 1-month window, below the 3-charge threshold). Detect over all tx so the
   // Advisor's subscription weight + tips match the Reports and Subscriptions pages.
   const recurring = detectRecurring(tx);
-  const goalView = projectGoals(goals, tx);
 
   // ===================== 50/30/20 BUDGET =====================
   let needs = 0, wants = 0, savingsSpent = 0;
@@ -178,7 +176,7 @@ export function buildAdvisor(tx: Tx[], goals: Goal[], from: string, to: string) 
     wins.push({ title: `${tr.category} down ${Math.abs(tr.deltaPct)}%`, text: `You spent ${'$' + Math.abs(tr.deltaAbs).toFixed(0)} less than last period. Nice restraint.` });
   if (recurring.alerts.increaseCount === 0 && recurring.totals.activeCount > 0) wins.push({ title: 'No subscription price hikes', text: 'None of your recurring charges crept up this period.' });
 
-  // ===================== ACTION PLAN (prioritized, goal-aware) =====================
+  // ===================== ACTION PLAN (prioritized) =====================
   const plan: AdvisorTip[] = [];
   const push = (icon: string, title: string, text: string, savePerMonth: number) => plan.push({ icon, title, text, savePerMonth });
   if (get('Dining & Fast Food') > 0 && cnt('Dining & Fast Food') >= 5)
@@ -193,18 +191,6 @@ export function buildAdvisor(tx: Tx[], goals: Goal[], from: string, to: string) 
   if (get('Bars & Nightlife') > 0 && get('Bars & Nightlife') > income * 0.04) push('🍸', 'Nightlife is a notable slice', `$${get('Bars & Nightlife').toFixed(0)} on bars & nightlife. Setting a weekly cap keeps it fun without the regret.`, per('Bars & Nightlife') * .4);
   if (get('Vape & Tobacco') > 0) push('⚠', 'Vape & tobacco adds up', `$${get('Vape & Tobacco').toFixed(0)} this period (≈ $${(per('Vape & Tobacco') * 12).toFixed(0)}/yr).`, per('Vape & Tobacco'));
   if (income > 0 && get('Savings & Investments') < income * .05) push('↑', 'Investing is light', `Only $${per('Savings & Investments').toFixed(0)}/mo is going to savings/investments. Even 5% of income automated compounds fast.`, 0);
-
-  // goal-aware: redirecting the biggest saving accelerates the soonest active goal
-  const activeGoal = goalView.goals.find(g => g.status === 'on_track' || g.status === 'behind' || g.status === 'no_target');
-  const topSaver = [...plan].sort((a, b) => b.savePerMonth - a.savePerMonth)[0];
-  if (activeGoal && topSaver && topSaver.savePerMonth > 1 && activeGoal.remaining > 0) {
-    const baseMonths = activeGoal.monthsToGoal ?? (goalView.totals.monthlyNet > 0 ? activeGoal.remaining / goalView.totals.monthlyNet : null);
-    if (baseMonths && goalView.totals.monthlyNet > 0) {
-      const fasterMonths = activeGoal.remaining / (goalView.totals.monthlyNet + topSaver.savePerMonth);
-      const saved = Math.round(baseMonths - fasterMonths);
-      if (saved >= 1) topSaver.goalImpact = `Redirecting this ~$${topSaver.savePerMonth.toFixed(0)}/mo to “${activeGoal.name}” would reach it about ${saved} month${saved > 1 ? 's' : ''} sooner.`;
-    }
-  }
 
   // pinned headline (kept first; satisfies the "savings/margin/spent more" contract)
   const headline: AdvisorTip = income <= 0 && spend > 0

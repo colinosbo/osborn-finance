@@ -3,22 +3,19 @@ import { randomUUID } from 'crypto';
 import { cfg } from './config.js';
 
 export interface User { id: string; email: string; display_name: string | null; plan: string; stripe_customer_id: string | null; }
-export interface Tx { id: string; user_id: string; date: string; name: string; merchant: string; amount: number; balance: number | null; category: string; source: string; plaid_transaction_id?: string | null; item_id?: string | null; }
+export interface Tx { id: string; user_id: string; date: string; name: string; merchant: string; amount: number; balance: number | null; category: string; source: string; plaid_transaction_id?: string | null; item_id?: string | null; account?: string | null; pinned?: boolean | null; manual_refund?: boolean | null; }
 export interface Item { id: string; user_id: string; plaid_item_id: string; institution_name: string; access_token_ciphertext: string; sync_cursor: string | null; status: string; }
 export interface Account { id: string; item_id: string; user_id: string; plaid_account_id: string; name: string; mask: string; type: string; current_balance: number; }
 // Investment tracking: a point-in-time balance for one account (see migration 007).
 export interface Snapshot { account_id: string; user_id: string; date: string; balance: number; }
 export interface Subscription { user_id: string; stripe_subscription_id: string | null; plan: string; status: string; current_period_end: string | null; }
-export interface Goal { id: string; user_id: string; name: string; target_amount: number; saved_amount: number; target_date: string | null; color: string; account_id: string | null; kind: 'savings' | 'payoff'; start_balance: number | null; created_at: string; }
-export type GoalPatch = Partial<Pick<Goal, 'name' | 'target_amount' | 'saved_amount' | 'target_date' | 'color' | 'account_id'>>;
-
 export interface Store {
   getOrCreateUser(email: string): Promise<User>;
   getUser(id: string): Promise<User | null>;
   setPlan(userId: string, plan: string, stripeCustomerId?: string): Promise<void>;
   deleteUser(userId: string): Promise<void>;
   insertTx(rows: Omit<Tx, 'id'>[]): Promise<number>;
-  listTx(userId: string, q: { from?: string; to?: string; cat?: string; flow?: string; search?: string; limit: number; offset: number; sort: string; dir: string }): Promise<{ rows: Tx[]; total: number }>;
+  listTx(userId: string, q: { from?: string; to?: string; cat?: string; flow?: string; search?: string; limit: number; offset: number; sort: string; dir: string; accounts?: string[] }): Promise<{ rows: Tx[]; total: number }>;
   allTx(userId: string, from?: string): Promise<Tx[]>;
   // Count of existing transactions per dedup key (`date|amount|name`), used for
   // count-aware CSV import: a re-imported row is skipped only up to the number
@@ -26,6 +23,7 @@ export interface Store {
   txCounts(userId: string): Promise<Map<string, number>>;
   setCategoryByMerchant(userId: string, merchant: string, category: string): Promise<number>;
   setTxCategories(userId: string, updates: { id: string; category: string }[]): Promise<number>;
+  pinTx(userId: string, id: string, category: string): Promise<boolean>;
   getOverrides(userId: string): Promise<Record<string, string>>;
   setOverride(userId: string, merchantKey: string, category: string): Promise<void>;
   addItem(it: Omit<Item, 'id'>): Promise<Item>;
@@ -44,10 +42,6 @@ export interface Store {
   getSubscription(userId: string): Promise<Subscription | null>;
   userByStripeCustomer(customerId: string): Promise<User | null>;
   getOrCreateUserBySub(sub: string, email: string): Promise<User>;
-  listGoals(userId: string): Promise<Goal[]>;
-  createGoal(g: Omit<Goal, 'id' | 'created_at'>): Promise<Goal>;
-  updateGoal(userId: string, id: string, patch: GoalPatch): Promise<Goal | null>;
-  deleteGoal(userId: string, id: string): Promise<boolean>;
   audit(userId: string | null, event: string, detail?: string, ipHash?: string): Promise<void>;
 }
 
@@ -69,7 +63,7 @@ class MemStore implements Store {
   async setPlan(userId: string, plan: string, sc?: string) {
     const u = this.users.get(userId); if (u) { u.plan = plan; if (sc) u.stripe_customer_id = sc; }
   }
-  async deleteUser(userId: string) { this.users.delete(userId); this.tx.delete(userId); this.overrides.delete(userId); this.items.delete(userId); this.goals.delete(userId); }
+  async deleteUser(userId: string) { this.users.delete(userId); this.tx.delete(userId); this.overrides.delete(userId); this.items.delete(userId); }
   async insertTx(rows: Omit<Tx, 'id'>[]) {
     for (const r of rows) {
       const list = this.tx.get(r.user_id) || [];
@@ -83,12 +77,13 @@ class MemStore implements Store {
     if (from) rows = rows.filter(t => t.date > from);
     return [...rows].sort((a, b) => a.date < b.date ? -1 : 1);
   }
-  async listTx(userId: string, q: { from?: string; to?: string; cat?: string; flow?: string; search?: string; limit: number; offset: number; sort: string; dir: string }) {
+  async listTx(userId: string, q: { from?: string; to?: string; cat?: string; flow?: string; search?: string; limit: number; offset: number; sort: string; dir: string; accounts?: string[] }) {
     let rows = await this.allTx(userId, q.from);
     if (q.to) rows = rows.filter(t => t.date <= q.to!);
     if (q.cat) rows = rows.filter(t => t.category === q.cat);
     if (q.flow === 'in') rows = rows.filter(t => t.amount > 0);
     if (q.flow === 'out') rows = rows.filter(t => t.amount < 0);
+    if (q.accounts?.length) rows = rows.filter(t => t.account != null && q.accounts!.includes(t.account));
     if (q.search) { const s = q.search.toLowerCase(); rows = rows.filter(t => t.name.toLowerCase().includes(s) || t.merchant.toLowerCase().includes(s)); }
     const dir = q.dir === 'asc' ? 1 : -1;
     if (q.sort === 'amount') {
@@ -120,6 +115,13 @@ class MemStore implements Store {
     let n = 0;
     for (const t of this.tx.get(userId) || []) { const c = byId.get(t.id); if (c !== undefined && t.category !== c) { t.category = c; n++; } }
     return n;
+  }
+  async pinTx(userId: string, id: string, category: string): Promise<boolean> {
+    const tx = this.tx.get(userId) || [];
+    const t = tx.find(x => x.id === id);
+    if (!t) return false;
+    t.category = category; t.pinned = true;
+    return true;
   }
   async getOverrides(userId: string) { return this.overrides.get(userId) || {}; }
   async setOverride(userId: string, mk: string, cat: string) {
@@ -187,25 +189,6 @@ class MemStore implements Store {
     (u as never as { entra_sub?: string }).entra_sub = sub;
     return u;
   }
-  goals = new Map<string, Goal[]>();
-  async listGoals(userId: string) { return [...(this.goals.get(userId) || [])].sort((a, b) => a.created_at < b.created_at ? -1 : 1); }
-  async createGoal(g: Omit<Goal, 'id' | 'created_at'>) {
-    const goal: Goal = { ...g, id: randomUUID(), created_at: new Date().toISOString() };
-    const list = this.goals.get(g.user_id) || []; list.push(goal); this.goals.set(g.user_id, list);
-    return goal;
-  }
-  async updateGoal(userId: string, id: string, patch: GoalPatch) {
-    const goal = (this.goals.get(userId) || []).find(x => x.id === id);
-    if (!goal) return null;
-    Object.assign(goal, patch);
-    return goal;
-  }
-  async deleteGoal(userId: string, id: string) {
-    const list = this.goals.get(userId) || [];
-    const next = list.filter(x => x.id !== id);
-    this.goals.set(userId, next);
-    return next.length !== list.length;
-  }
   async audit(user_id: string | null, event: string, detail?: string, ip_hash?: string) {
     this.auditLog.push({ user_id, event, detail, ip_hash, at: new Date().toISOString() });
   }
@@ -219,7 +202,7 @@ import { dirname, join } from 'path';
 
 class PgStore implements Store {
   pool: pg.Pool;
-  constructor(url: string) { this.pool = new pg.Pool({ connectionString: url }); }
+  constructor(url: string) { this.pool = new pg.Pool({ connectionString: url, connectionTimeoutMillis: 10000 }); }
   async migrate() {
     // INC-5: track applied migrations so non-idempotent files never double-run.
     await this.pool.query(`CREATE TABLE IF NOT EXISTS schema_migrations (filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
@@ -261,21 +244,21 @@ class PgStore implements Store {
       const chunk = rows.slice(i, i + CHUNK);
       const vals: unknown[] = [];
       const tuples = chunk.map((r, j) => {
-        const b = j * 10;
-        vals.push(r.user_id, r.date, r.name, r.merchant, r.amount, r.balance, r.category, r.source, r.plaid_transaction_id || null, r.item_id || null);
-        return `($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5},$${b + 6},$${b + 7},$${b + 8},$${b + 9},$${b + 10})`;
+        const b = j * 11;
+        vals.push(r.user_id, r.date, r.name, r.merchant, r.amount, r.balance, r.category, r.source, r.plaid_transaction_id || null, r.item_id || null, r.account || null);
+        return `($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5},$${b + 6},$${b + 7},$${b + 8},$${b + 9},$${b + 10},$${b + 11})`;
       });
-      const res = await this.q(`INSERT INTO transactions(user_id,date,name,merchant,amount,balance,category,source,plaid_transaction_id,item_id)
+      const res = await this.q(`INSERT INTO transactions(user_id,date,name,merchant,amount,balance,category,source,plaid_transaction_id,item_id,account)
                     VALUES ${tuples.join(',')} ${conflict}`, vals);
       n += res.rowCount || 0;
     }
     return n;
   }
   async allTx(u: string, from?: string) {
-    const r = await this.q(`SELECT id,user_id,to_char(date,'YYYY-MM-DD') date,name,merchant,amount::float,balance::float,category,source FROM transactions WHERE user_id=$1 ${from ? 'AND date > $2' : ''} ORDER BY date`, from ? [u, from] : [u]);
+    const r = await this.q(`SELECT id,user_id,to_char(date,'YYYY-MM-DD') date,name,merchant,amount::float,balance::float,category,source,account,pinned,manual_refund FROM transactions WHERE user_id=$1 ${from ? 'AND date > $2' : ''} ORDER BY date`, from ? [u, from] : [u]);
     return r.rows;
   }
-  async listTx(u: string, q2: { from?: string; to?: string; cat?: string; flow?: string; search?: string; limit: number; offset: number; sort: string; dir: string }) {
+  async listTx(u: string, q2: { from?: string; to?: string; cat?: string; flow?: string; search?: string; limit: number; offset: number; sort: string; dir: string; accounts?: string[] }) {
     const sortCols: Record<string,string> = { date:'date', amount:'amount', name:'name', category:'category' };
     const conds = ['user_id=$1']; const vals: unknown[] = [u]; let i = 2;
     if (q2.from) { conds.push(`date > $${i++}`); vals.push(q2.from); }
@@ -283,10 +266,11 @@ class PgStore implements Store {
     if (q2.cat) { conds.push(`category = $${i++}`); vals.push(q2.cat); }
     if (q2.flow === 'in') conds.push('amount > 0');
     if (q2.flow === 'out') conds.push('amount < 0');
+    if (q2.accounts?.length) { conds.push(`account = ANY($${i++})`); vals.push(q2.accounts); }
     if (q2.search) { conds.push(`(name ILIKE $${i} OR merchant ILIKE $${i})`); vals.push('%' + q2.search + '%'); i++; }
     const where = conds.join(' AND ');
     const total = +(await this.q(`SELECT count(*) c FROM transactions WHERE ${where}`, vals)).rows[0].c;
-    const rows = (await this.q(`SELECT id,user_id,to_char(date,'YYYY-MM-DD') date,name,merchant,amount::float,balance::float,category,source FROM transactions WHERE ${where} ORDER BY ${sortCols[q2.sort]||'date'} ${q2.dir==='asc'?'ASC':'DESC'} LIMIT $${i} OFFSET $${i+1}`, [...vals, q2.limit, q2.offset])).rows;
+    const rows = (await this.q(`SELECT id,user_id,to_char(date,'YYYY-MM-DD') date,name,merchant,amount::float,balance::float,category,source,account,pinned,manual_refund FROM transactions WHERE ${where} ORDER BY ${sortCols[q2.sort]||'date'} ${q2.dir==='asc'?'ASC':'DESC'} LIMIT $${i} OFFSET $${i+1}`, [...vals, q2.limit, q2.offset])).rows;
     return { rows, total };
   }
   async txCounts(u: string) {
@@ -307,6 +291,10 @@ class PgStore implements Store {
       n += r.rowCount || 0;
     }
     return n;
+  }
+  async pinTx(u: string, id: string, category: string): Promise<boolean> {
+    const r = await this.q(`UPDATE transactions SET category=$3, pinned=true WHERE id=$2::uuid AND user_id=$1`, [u, id, category]);
+    return (r.rowCount || 0) > 0;
   }
   async getOverrides(u: string) {
     const r = await this.q(`SELECT merchant_key,category FROM category_overrides WHERE user_id=$1`, [u]);
@@ -359,27 +347,6 @@ class PgStore implements Store {
     await this.q(`UPDATE users SET entra_subject_id=$2 WHERE id=$1`, [u.id, sub]);
     return u;
   }
-  async listGoals(u: string) {
-    return (await this.q(`SELECT id,user_id,name,target_amount::float,saved_amount::float,to_char(target_date,'YYYY-MM-DD') target_date,color,account_id,kind,start_balance::float,to_char(created_at,'YYYY-MM-DD"T"HH24:MI:SSZ') created_at FROM goals WHERE user_id=$1 ORDER BY created_at`, [u])).rows;
-  }
-  async createGoal(g: Omit<Goal, 'id' | 'created_at'>) {
-    return (await this.q(`INSERT INTO goals(user_id,name,target_amount,saved_amount,target_date,color,account_id,kind,start_balance) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
-                          RETURNING id,user_id,name,target_amount::float,saved_amount::float,to_char(target_date,'YYYY-MM-DD') target_date,color,account_id,kind,start_balance::float,to_char(created_at,'YYYY-MM-DD"T"HH24:MI:SSZ') created_at`,
-      [g.user_id, g.name, g.target_amount, g.saved_amount, g.target_date, g.color, g.account_id, g.kind, g.start_balance])).rows[0];
-  }
-  async updateGoal(u: string, id: string, patch: GoalPatch) {
-    const cols: string[] = []; const vals: unknown[] = [u, id]; let i = 3;
-    for (const k of ['name', 'target_amount', 'saved_amount', 'target_date', 'color', 'account_id'] as const)
-      if (patch[k] !== undefined) { cols.push(`${k}=$${i++}`); vals.push(patch[k]); }
-    if (!cols.length) return (await this.listGoals(u)).find(x => x.id === id) || null;
-    const r = await this.q(`UPDATE goals SET ${cols.join(',')} WHERE user_id=$1 AND id=$2
-                            RETURNING id,user_id,name,target_amount::float,saved_amount::float,to_char(target_date,'YYYY-MM-DD') target_date,color,account_id,kind,start_balance::float,to_char(created_at,'YYYY-MM-DD"T"HH24:MI:SSZ') created_at`, vals);
-    return r.rows[0] || null;
-  }
-  async deleteGoal(u: string, id: string) {
-    const r = await this.q(`DELETE FROM goals WHERE user_id=$1 AND id=$2`, [u, id]);
-    return (r.rowCount || 0) > 0;
-  }
   async audit(u: string | null, e: string, d?: string, ipHash?: string) { await this.q(`INSERT INTO audit_log(user_id,event,detail,ip_hash) VALUES($1,$2,$3,$4)`, [u, e, d || null, ipHash || null]); }
 }
 
@@ -393,3 +360,4 @@ export async function makeStore(): Promise<Store> {
   console.log('store: in-memory (set DATABASE_URL for postgres)');
   return new MemStore();
 }
+

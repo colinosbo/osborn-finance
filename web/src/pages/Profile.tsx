@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, getProfile, getEmail, setEmail, initials, ago, fmtDate, planLabel } from '../api';
+import { api, getProfile, initials, ago, fmtDate, planLabel } from '../api';
 import { loadPrefs, savePrefs } from '../prefs';
 import { ACTIVITY_LABEL } from '../mock';
 import type { Profile as ProfileT, Session } from '../types';
@@ -17,7 +17,7 @@ type SectionId =
   | 'devices' | 'activity'
   | 'banks' | 'billing'
   | 'export' | 'delete'
-  | 'dev';
+;
 
 const NAV: { group: string; items: { id: SectionId; label: string; ico: string }[] }[] = [
   { group: 'Account management', items: [
@@ -41,9 +41,6 @@ const NAV: { group: string; items: { id: SectionId; label: string; ico: string }
   { group: 'Privacy & data', items: [
     { id: 'export', label: 'Export your data', ico: '⤓' },
     { id: 'delete', label: 'Account deletion', ico: '⚠️' }
-  ] },
-  { group: 'Developer', items: [
-    { id: 'dev', label: 'Switch user (dev)', ico: '🧪' }
   ] }
 ];
 
@@ -72,8 +69,6 @@ export default function Profile({ toast }: { toast: Toast }) {
   const [editEmail, setEditEmail] = useState(false);
   const [rec, setRec] = useState({ recoveryEmail: '', recoveryPhone: '' });
   const [editRec, setEditRec] = useState(false);
-  const [devEmail, setDevEmail] = useState(getEmail());
-
   useEffect(() => {
     getProfile().then(pr => {
       setP(pr);
@@ -264,12 +259,6 @@ export default function Profile({ toast }: { toast: Toast }) {
         <Section title="Account deletion" sub="Permanently erase your account and data.">
           <div className="callout danger">This removes your transactions, bank connections, and profile. Audit records are retained per policy. This cannot be undone.</div>
           <div className="controls" style={{ marginTop: 14, marginBottom: 0 }}><button className="btn danger" onClick={del}>Delete my account</button></div>
-        </Section>
-      );
-      case 'dev': return (
-        <Section title="Switch user (dev)" sub="Dev mode only — identity is the x-user-email header. Production uses Entra SSO.">
-          <label className="fld"><span>Email</span><input value={devEmail} onChange={e => setDevEmail(e.target.value)} /></label>
-          <div className="controls" style={{ marginBottom: 0 }}><button className="btn" onClick={() => { setEmail(devEmail); toast('Switched user (dev)'); location.reload(); }}>Switch user</button></div>
         </Section>
       );
     }

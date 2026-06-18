@@ -30,22 +30,6 @@ export const schemas = {
     days: z.coerce.number().int().min(1).max(3650).optional(),
     offset: z.coerce.number().int().min(0).max(120).optional()
   }),
-  goalCreate: z.object({
-    name: z.string().min(1).max(80),
-    target_amount: z.coerce.number().positive().max(1e9),
-    saved_amount: z.coerce.number().min(0).max(1e9).optional(),
-    target_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
-    color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
-    account_id: z.string().uuid().nullable().optional()
-  }),
-  goalUpdate: z.object({
-    name: z.string().min(1).max(80).optional(),
-    target_amount: z.coerce.number().positive().max(1e9).optional(),
-    saved_amount: z.coerce.number().min(0).max(1e9).optional(),
-    target_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
-    color: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
-    account_id: z.string().uuid().nullable().optional()
-  }),
   transactionsQuery: z.object({
     days: z.coerce.number().int().min(0).max(100000).optional(),
     from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
@@ -56,7 +40,8 @@ export const schemas = {
     limit: z.coerce.number().int().min(1).max(200).optional(),
     offset: z.coerce.number().int().min(0).optional(),
     sort: z.enum(['date', 'amount', 'name', 'category']).optional(),
-    dir: z.enum(['asc', 'desc']).optional()
+    dir: z.enum(['asc', 'desc']).optional(),
+    accounts: z.string().max(1000).optional()
   })
 };
 

@@ -1,0 +1,848 @@
+===============================================================================
+COVISOR  —  AZURE DEPLOYMENT GUIDE
+Complete step-by-step setup. Every resource, every setting, every command.
+Last updated: June 2026
+===============================================================================
+
+STATUS OF EXISTING WORK
+  [DONE]    Resource group  rg-covisor-prod  (region TBD — lock this in Step 0)
+  [PENDING] Everything else in this document
+
+
+===============================================================================
+STEP 0  —  LOCK IN YOUR REGION AND GLOBAL VARIABLES
+===============================================================================
+
+Pick ONE region and use it everywhere. Mixing regions adds latency and egress
+costs. Recommended for US users: eastus2 or centralus.
+
+Run these once in your terminal and keep the window open — every az command
+below references these variables.
+
+  REGION=eastus2                         # change to your choice
+  RG=rg-covisor-prod
+  RG_DEV=rg-covisor-dev
+  APP=covisor
+  ENV_NAME=cae-covisor-prod
+  CA_NAME=ca-covisor-api-prod
+  PG_NAME=pg-covisor-prod
+  SWA_NAME=swa-covisor-prod
+  LOG_NAME=log-covisor-prod
+  GHCR_IMAGE=ghcr.io/<YOUR_GITHUB_ORG>/covisor-api   # fill in your GitHub org
+
+If the resource group region is already set, confirm it:
+  az group show --name $RG --query location -o tsv
+
+Update the Covisor_Azure_Setup_Log.txt with the confirmed region before going
+further.
+
+
+===============================================================================
+STEP 1  —  PREREQUISITES ON YOUR MACHINE
+===============================================================================
+
+Install these before running any az commands:
+
+  - Azure CLI  (az)      https://learn.microsoft.com/cli/azure/install-azure-cli
+  - Docker Desktop       https://www.docker.com/products/docker-desktop
+  - Node.js 20+          (already have this)
+  - GitHub CLI  (gh)     optional but helpful
+
+Log in to Azure:
+  az login
+  az account set --subscription "<YOUR_SUBSCRIPTION_ID>"
+
+Verify you are in the right subscription:
+  az account show --query "{name:name, id:id}" -o table
+
+
+===============================================================================
+STEP 2  —  DEV RESOURCE GROUP
+===============================================================================
+
+Create the dev resource group (prod already exists):
+
+  az group create \
+    --name $RG_DEV \
+    --location $REGION \
+    --tags app=covisor env=dev owner=colin
+
+
+===============================================================================
+STEP 3  —  LOG ANALYTICS WORKSPACE
+===============================================================================
+
+PURPOSE: captures Container App logs and Postgres logs.
+
+  az monitor log-analytics workspace create \
+    --resource-group $RG \
+    --workspace-name $LOG_NAME \
+    --location $REGION \
+    --retention-time 30 \
+    --tags app=covisor env=prod owner=colin
+
+Save the workspace ID — you need it in Step 4:
+
+  LOG_WORKSPACE_ID=$(az monitor log-analytics workspace show \
+    --resource-group $RG \
+    --workspace-name $LOG_NAME \
+    --query customerId -o tsv)
+
+  LOG_WORKSPACE_KEY=$(az monitor log-analytics workspace get-shared-keys \
+    --resource-group $RG \
+    --workspace-name $LOG_NAME \
+    --query primarySharedKey -o tsv)
+
+
+===============================================================================
+STEP 4  —  CONTAINER APPS ENVIRONMENT
+===============================================================================
+
+PURPOSE: the managed environment that runs the API container.
+
+  az containerapp env create \
+    --name $ENV_NAME \
+    --resource-group $RG \
+    --location $REGION \
+    --logs-workspace-id $LOG_WORKSPACE_ID \
+    --logs-workspace-key $LOG_WORKSPACE_KEY \
+    --tags app=covisor env=prod owner=colin
+
+After creation, record the static outbound IPs — you need them for the
+Postgres firewall (Step 6):
+
+  az containerapp env show \
+    --name $ENV_NAME \
+    --resource-group $RG \
+    --query properties.staticIp -o tsv
+
+  (also check: properties.outboundIpAddresses if the above is empty)
+
+  EGRESS_IPS="<paste the IPs here, comma-separated>"
+
+
+===============================================================================
+STEP 5  —  POSTGRESQL FLEXIBLE SERVER
+===============================================================================
+
+PURPOSE: the system of record. Your only real monthly cost (~$15-25/mo).
+
+IMPORTANT: choose a strong password and save it in a password manager.
+Never put it in the repo.
+
+  PG_ADMIN_USER=covisoradmin
+  PG_ADMIN_PASS="<STRONG_RANDOM_PASSWORD>"   # min 8 chars, upper+lower+number+symbol
+  PG_APP_USER=covisorapp
+  PG_APP_PASS="<DIFFERENT_STRONG_PASSWORD>"
+
+Create the server:
+
+  az postgres flexible-server create \
+    --name $PG_NAME \
+    --resource-group $RG \
+    --location $REGION \
+    --admin-user $PG_ADMIN_USER \
+    --admin-password "$PG_ADMIN_PASS" \
+    --sku-name Standard_B1ms \
+    --tier Burstable \
+    --version 16 \
+    --storage-size 32 \
+    --storage-auto-grow Enabled \
+    --backup-retention 14 \
+    --geo-redundant-backup Disabled \
+    --high-availability Disabled \
+    --public-access None \
+    --tags app=covisor env=prod owner=colin
+
+Enable SSL enforcement:
+
+  az postgres flexible-server parameter set \
+    --name $PG_NAME --resource-group $RG \
+    --parameter-name require_secure_transport --value ON
+
+Set minimum TLS:
+
+  az postgres flexible-server parameter set \
+    --name $PG_NAME --resource-group $RG \
+    --parameter-name ssl_min_protocol_version --value TLSv1.2
+
+Enable connection logging (for audit):
+
+  az postgres flexible-server parameter set \
+    --name $PG_NAME --resource-group $RG \
+    --parameter-name log_connections --value ON
+
+  az postgres flexible-server parameter set \
+    --name $PG_NAME --resource-group $RG \
+    --parameter-name log_disconnections --value ON
+
+Add ONLY the Container Apps egress IPs to the firewall.
+Repeat for each IP (replace x.x.x.x with each egress IP from Step 4):
+
+  az postgres flexible-server firewall-rule create \
+    --name $PG_NAME --resource-group $RG \
+    --rule-name allow-containerapp-1 \
+    --start-ip-address x.x.x.x --end-ip-address x.x.x.x
+
+Temporarily add your own IP to run migrations (remove after!):
+
+  MY_IP=$(curl -s https://api.ipify.org)
+  az postgres flexible-server firewall-rule create \
+    --name $PG_NAME --resource-group $RG \
+    --rule-name allow-admin-temp \
+    --start-ip-address $MY_IP --end-ip-address $MY_IP
+
+Create the app database and limited role:
+
+  PG_HOST="${PG_NAME}.postgres.database.azure.com"
+
+  psql "host=$PG_HOST port=5432 dbname=postgres \
+    user=${PG_ADMIN_USER} password=${PG_ADMIN_PASS} sslmode=require" << SQL
+    CREATE DATABASE covisor;
+    CREATE ROLE covisorapp WITH LOGIN PASSWORD '${PG_APP_PASS}';
+    GRANT CONNECT ON DATABASE covisor TO covisorapp;
+    \c covisor
+    GRANT USAGE ON SCHEMA public TO covisorapp;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO covisorapp;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public
+      GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO covisorapp;
+SQL
+
+Run the app's schema migrations (from the server directory):
+
+  DATABASE_URL="postgresql://covisorapp:${PG_APP_PASS}@${PG_HOST}/covisor?sslmode=require" \
+    npm run migrate    # or however the app initialises its schema
+
+Remove your admin IP from the firewall after setup:
+
+  az postgres flexible-server firewall-rule delete \
+    --name $PG_NAME --resource-group $RG \
+    --rule-name allow-admin-temp --yes
+
+The DATABASE_URL for the Container App:
+  postgresql://covisorapp:<PG_APP_PASS>@pg-covisor-prod.postgres.database.azure.com/covisor?sslmode=require
+
+
+===============================================================================
+STEP 6  —  MICROSOFT ENTRA EXTERNAL ID (AUTHENTICATION)
+===============================================================================
+
+PURPOSE: production auth. The app uses AUTH_MODE=entra in production.
+The app config requires: ENTRA_JWKS_URL, ENTRA_AUDIENCE, ENTRA_ISSUER.
+
+In the Azure portal (CLI support is limited for External ID tenants):
+
+  a) Go to: portal.azure.com > Microsoft Entra External ID
+     (or search "External Identities")
+
+  b) Create a new external tenant:
+       Name: covisor-prod
+       Domain: covisor.onmicrosoft.com (or your custom domain)
+       Location: same region as everything else
+
+  c) In the new tenant, register the API application:
+       App registrations > New registration
+       Name: Covisor API
+       Supported account types: Accounts in this organizational directory only
+       No redirect URI needed for the API itself
+
+     After creation, note:
+       Application (client) ID  ->  this is your ENTRA_AUDIENCE
+       Directory (tenant) ID    ->  used in the URLs below
+
+  d) Expose an API scope:
+       API permissions > Expose an API
+       Application ID URI: api://<Application-client-ID>
+       Add scope: access_as_user (or similar, enabled for users and admins)
+
+  e) Register the frontend application:
+       App registrations > New registration
+       Name: Covisor Web
+       Supported account types: same tenant
+       Redirect URIs: SPA type, https://<yourdomain>, http://localhost:5173
+
+  f) Grant the frontend app permission to the API scope.
+
+  g) Collect these values for your Container App secrets:
+       ENTRA_AUDIENCE  = <Application-client-ID of the API registration>
+       ENTRA_ISSUER    = https://<tenant>.ciamlogin.com/<tenant-id>/v2.0
+       ENTRA_JWKS_URL  = https://<tenant>.ciamlogin.com/<tenant-id>/discovery/v2.0/keys
+
+     Verify the JWKS URL by curling it — it must return a JSON with "keys".
+
+
+===============================================================================
+STEP 7  —  GENERATE THE TOKEN ENCRYPTION KEY
+===============================================================================
+
+PURPOSE: TOKEN_ENC_KEY encrypts Plaid access tokens at rest. This is the
+highest-value secret — losing it means re-linking all bank accounts.
+
+Generate a cryptographically random 32-byte base64 key:
+
+  node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+
+Save the output. This value goes into the Container App secret TOKEN_ENC_KEY.
+Never store it in the repo or a file. Only in the secret store.
+
+Also generate AUDIT_IP_SALT:
+
+  node -e "console.log(require('crypto').randomBytes(16).toString('base64'))"
+
+
+===============================================================================
+STEP 8  —  DOCKERFILE  (DOES NOT EXIST YET — CREATE THIS)
+===============================================================================
+
+Create this file at: server/Dockerfile
+
+-------- server/Dockerfile --------
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY tsconfig.json ./
+COPY src ./src
+RUN npm run build
+
+FROM node:20-alpine
+WORKDIR /app
+RUN addgroup -S covisor && adduser -S covisor -G covisor
+COPY package*.json ./
+RUN npm ci --omit=dev
+COPY --from=builder /app/dist ./dist
+USER covisor
+ENV NODE_ENV=production
+ENV PORT=4000
+EXPOSE 4000
+CMD ["node", "dist/index.js"]
+------------------------------------
+
+Build and test locally before pushing:
+
+  cd server
+  docker build -t covisor-api:local .
+  docker run --rm -e NODE_ENV=development -e AUTH_MODE=dev -p 4000:4000 covisor-api:local
+  curl http://localhost:4000/api/health
+
+
+===============================================================================
+STEP 9  —  GITHUB CONTAINER REGISTRY SETUP
+===============================================================================
+
+Push the image to GitHub Container Registry (free with your repo).
+
+  a) In GitHub: Settings > Developer settings > Personal access tokens
+     Create a fine-grained PAT with scope: read:packages (for pull)
+     Create a second PAT with scope: write:packages (for CI push)
+     Save both — the write PAT goes in GitHub Actions secrets, the read PAT
+     goes in the Container App secret store.
+
+  b) Log in and push the image (first time, from your machine):
+
+       GITHUB_ORG=<your-github-username-or-org>
+       GHCR_WRITE_PAT=<your-write-pat>
+
+       echo $GHCR_WRITE_PAT | docker login ghcr.io -u $GITHUB_ORG --password-stdin
+
+       cd server
+       docker build -t ghcr.io/$GITHUB_ORG/covisor-api:latest .
+       docker push ghcr.io/$GITHUB_ORG/covisor-api:latest
+
+       # Get the digest for pinned deploys
+       docker inspect --format='{{index .RepoDigests 0}}' \
+         ghcr.io/$GITHUB_ORG/covisor-api:latest
+
+  c) Make the package private:
+     GitHub > Packages > covisor-api > Package settings > Change visibility > Private
+
+
+===============================================================================
+STEP 10  —  STRIPE SETUP (PRODUCTION)
+===============================================================================
+
+In the Stripe dashboard (dashboard.stripe.com):
+
+  a) Create products and prices for your three plans:
+       Personal  — set the price ID, save as STRIPE_PRICE_PERSONAL
+       Family    — save as STRIPE_PRICE_FAMILY
+       Enterprise — save as STRIPE_PRICE_ENTERPRISE
+
+  b) Webhooks > Add endpoint:
+       URL: https://<container-app-fqdn>/api/webhooks/stripe
+       Events to listen for:
+         checkout.session.completed
+         customer.subscription.updated
+         customer.subscription.deleted
+         invoice.payment_failed
+       Save the signing secret as STRIPE_WEBHOOK_SECRET.
+
+  c) Collect:
+       STRIPE_SECRET_KEY      (Developers > API keys > Secret key)
+       STRIPE_WEBHOOK_SECRET  (from the webhook endpoint)
+       STRIPE_PRICE_PERSONAL  (price_...)
+       STRIPE_PRICE_FAMILY    (price_...)
+       STRIPE_PRICE_ENTERPRISE (price_...)
+
+
+===============================================================================
+STEP 11  —  PLAID SETUP (PRODUCTION)
+===============================================================================
+
+In the Plaid dashboard (dashboard.plaid.com):
+
+  a) Switch to Production environment.
+
+  b) Collect:
+       PLAID_CLIENT_ID   (from Team > Keys)
+       PLAID_SECRET      (Production secret key)
+       PLAID_ENV         = production
+
+  c) Webhooks:
+       URL: https://<container-app-fqdn>/api/webhooks/plaid
+       Register this after you have the Container App FQDN (Step 12).
+
+
+===============================================================================
+STEP 12  —  CONTAINER APP (THE API)
+===============================================================================
+
+PURPOSE: deploys and runs the Express API container.
+
+First, create all the secrets the Container App will hold.
+Replace every <value> with the real value from previous steps.
+
+  GHCR_READ_PAT=<your-read-only-packages-pat>
+  DB_URL="postgresql://covisorapp:<PG_APP_PASS>@pg-covisor-prod.postgres.database.azure.com/covisor?sslmode=require"
+
+Create the Container App with all secrets and env vars:
+
+  az containerapp create \
+    --name $CA_NAME \
+    --resource-group $RG \
+    --environment $ENV_NAME \
+    --image ghcr.io/$GITHUB_ORG/covisor-api:latest \
+    --registry-server ghcr.io \
+    --registry-username $GITHUB_ORG \
+    --registry-password $GHCR_READ_PAT \
+    --target-port 4000 \
+    --ingress external \
+    --transport auto \
+    --min-replicas 1 \
+    --max-replicas 3 \
+    --cpu 0.5 \
+    --memory 1.0Gi \
+    --secrets \
+      database-url="$DB_URL" \
+      plaid-client-id="<PLAID_CLIENT_ID>" \
+      plaid-secret="<PLAID_SECRET>" \
+      stripe-secret-key="<STRIPE_SECRET_KEY>" \
+      stripe-webhook-secret="<STRIPE_WEBHOOK_SECRET>" \
+      encryption-key="<TOKEN_ENC_KEY>" \
+      audit-ip-salt="<AUDIT_IP_SALT>" \
+      entra-jwks-url="<ENTRA_JWKS_URL>" \
+      entra-audience="<ENTRA_AUDIENCE>" \
+      entra-issuer="<ENTRA_ISSUER>" \
+      ghcr-pat="<GHCR_READ_PAT>" \
+    --env-vars \
+      NODE_ENV=production \
+      PORT=4000 \
+      AUTH_MODE=entra \
+      TRUST_PROXY=1 \
+      PLAID_ENV=production \
+      PLAID_WEBHOOK_URL="https://<CA_FQDN>/api/webhooks/plaid" \
+      STRIPE_PRICE_PERSONAL="<STRIPE_PRICE_PERSONAL>" \
+      STRIPE_PRICE_FAMILY="<STRIPE_PRICE_FAMILY>" \
+      STRIPE_PRICE_ENTERPRISE="<STRIPE_PRICE_ENTERPRISE>" \
+      WEB_ORIGIN="https://<yourdomain>" \
+      DATABASE_URL=secretref:database-url \
+      PLAID_CLIENT_ID=secretref:plaid-client-id \
+      PLAID_SECRET=secretref:plaid-secret \
+      STRIPE_SECRET_KEY=secretref:stripe-secret-key \
+      STRIPE_WEBHOOK_SECRET=secretref:stripe-webhook-secret \
+      TOKEN_ENC_KEY=secretref:encryption-key \
+      TOKEN_ENC_KEY_ID=1 \
+      AUDIT_IP_SALT=secretref:audit-ip-salt \
+      ENTRA_JWKS_URL=secretref:entra-jwks-url \
+      ENTRA_AUDIENCE=secretref:entra-audience \
+      ENTRA_ISSUER=secretref:entra-issuer \
+    --tags app=covisor env=prod owner=colin
+
+Get the FQDN (public URL of the API):
+
+  az containerapp show \
+    --name $CA_NAME --resource-group $RG \
+    --query properties.configuration.ingress.fqdn -o tsv
+
+  CA_FQDN=<paste the FQDN here>
+
+Now go back and update in Plaid and Stripe dashboards:
+  Plaid webhook:  https://$CA_FQDN/api/webhooks/plaid
+  Stripe webhook: https://$CA_FQDN/api/webhooks/stripe
+
+Update the Container App with the real PLAID_WEBHOOK_URL:
+
+  az containerapp update \
+    --name $CA_NAME --resource-group $RG \
+    --set-env-vars PLAID_WEBHOOK_URL="https://$CA_FQDN/api/webhooks/plaid"
+
+Verify the API is up:
+
+  curl https://$CA_FQDN/api/health
+  # expected: {"ok":true}
+
+
+===============================================================================
+STEP 13  —  STATIC WEB APP (FRONTEND)
+===============================================================================
+
+PURPOSE: hosts the Vite/React frontend globally on Azure CDN with free TLS.
+
+  az staticwebapp create \
+    --name $SWA_NAME \
+    --resource-group $RG \
+    --location $REGION \
+    --source https://github.com/<YOUR_GITHUB_ORG>/<YOUR_REPO> \
+    --branch main \
+    --app-location web \
+    --output-location dist \
+    --login-with-github \
+    --tags app=covisor env=prod owner=colin
+
+This creates a GitHub Actions workflow automatically in your repo.
+
+After creation, set the app settings (frontend build env vars):
+
+  az staticwebapp appsettings set \
+    --name $SWA_NAME \
+    --resource-group $RG \
+    --setting-names \
+      VITE_API_URL="https://$CA_FQDN" \
+      VITE_ENTRA_CLIENT_ID="<ENTRA_WEB_APP_CLIENT_ID>" \
+      VITE_ENTRA_AUTHORITY="https://<tenant>.ciamlogin.com/<tenant-id>" \
+      VITE_STRIPE_PUBLISHABLE_KEY="<STRIPE_PUBLISHABLE_KEY>"
+
+Add your custom domain:
+
+  az staticwebapp hostname set \
+    --name $SWA_NAME --resource-group $RG \
+    --hostname <yourdomain>
+
+  Follow the DNS validation instructions in the portal.
+  Azure provisions the TLS certificate automatically.
+
+Add staticwebapp.config.json to the web/ directory:
+
+-------- web/staticwebapp.config.json --------
+{
+  "navigationFallback": {
+    "rewrite": "/index.html"
+  },
+  "globalHeaders": {
+    "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://<CA_FQDN> https://js.stripe.com https://cdn.plaid.com; frame-src https://js.stripe.com https://cdn.plaid.com; img-src 'self' data:"
+  },
+  "routes": [
+    { "route": "/api/*", "statusCode": 404 }
+  ]
+}
+-----------------------------------------------
+
+
+===============================================================================
+STEP 14  —  GITHUB ACTIONS CI/CD  (DOES NOT EXIST YET — CREATE THESE)
+===============================================================================
+
+Create .github/workflows/ in the root of the repo.
+
+-------- .github/workflows/ci.yml --------
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci
+        working-directory: server
+      - run: npm run build
+        working-directory: server
+      - run: npm test
+        working-directory: server
+------------------------------------------
+
+-------- .github/workflows/deploy-api.yml --------
+name: Deploy API
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ghcr.io/${{ github.repository_owner }}/covisor-api
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write   # for OIDC Azure login
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: ./server
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ github.sha }}
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to Container App
+        run: |
+          az containerapp update \
+            --name ca-covisor-api-prod \
+            --resource-group rg-covisor-prod \
+            --image ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+--------------------------------------------------
+
+GitHub Actions secrets to create (repo Settings > Secrets):
+  AZURE_CLIENT_ID         (the client ID of your CI federated identity)
+  AZURE_TENANT_ID         (your Azure tenant ID)
+  AZURE_SUBSCRIPTION_ID   (your subscription ID)
+
+Set up Azure federated credential for CI (replaces storing a secret in GitHub):
+
+  az ad app create --display-name "covisor-ci"
+  # note the appId
+  az ad sp create --id <appId>
+
+  az role assignment create \
+    --assignee <appId> \
+    --role Contributor \
+    --scope /subscriptions/<SUBSCRIPTION_ID>/resourceGroups/rg-covisor-prod
+
+  # Add federated credential in portal:
+  # Entra > App registrations > covisor-ci > Certificates & secrets
+  # > Federated credentials > Add > GitHub Actions
+  # Organization: <your-org>, Repository: <your-repo>, Entity: Branch > main
+
+
+===============================================================================
+STEP 15  —  ALERTING AND BUDGET
+===============================================================================
+
+Create action group (email + SMS to you):
+
+  az monitor action-group create \
+    --name ag-covisor-prod \
+    --resource-group $RG \
+    --short-name covisor \
+    --email admin-email colin "<YOUR_EMAIL>" \
+    --sms admin-sms 1 "<YOUR_PHONE_NUMBER>"
+
+Budget alert (replace subscription ID):
+
+  az consumption budget create \
+    --budget-name covisor-monthly \
+    --amount 60 \
+    --time-grain Monthly \
+    --start-date 2026-07-01 \
+    --end-date 2027-07-01 \
+    --category Cost \
+    --resource-group $RG \
+    --notifications \
+      firstThreshold={"enabled":true,"operator":"GreaterThan","threshold":50,"contactEmails":["<YOUR_EMAIL>"]} \
+      secondThreshold={"enabled":true,"operator":"GreaterThan","threshold":80,"contactEmails":["<YOUR_EMAIL>"]}
+
+API availability alert:
+
+  az monitor metrics alert create \
+    --name "covisor-api-5xx" \
+    --resource-group $RG \
+    --scopes $(az containerapp show -n $CA_NAME -g $RG --query id -o tsv) \
+    --condition "avg Requests > 0 where StatusCodeClass == '5xx'" \
+    --window-size 5m \
+    --evaluation-frequency 1m \
+    --action ag-covisor-prod \
+    --description "API returning 5xx errors"
+
+Postgres storage alert:
+
+  PG_ID=$(az postgres flexible-server show -n $PG_NAME -g $RG --query id -o tsv)
+
+  az monitor metrics alert create \
+    --name "covisor-pg-storage-80pct" \
+    --resource-group $RG \
+    --scopes $PG_ID \
+    --condition "avg storage_percent > 80" \
+    --window-size 10m \
+    --evaluation-frequency 5m \
+    --action ag-covisor-prod \
+    --description "Postgres storage above 80%"
+
+Postgres CPU alert:
+
+  az monitor metrics alert create \
+    --name "covisor-pg-cpu-80pct" \
+    --resource-group $RG \
+    --scopes $PG_ID \
+    --condition "avg cpu_percent > 80" \
+    --window-size 10m \
+    --evaluation-frequency 5m \
+    --action ag-covisor-prod \
+    --description "Postgres CPU above 80%"
+
+
+===============================================================================
+STEP 16  —  TEST A POSTGRES RESTORE (DO THIS BEFORE LAUNCH)
+===============================================================================
+
+A backup you have never restored is not a backup.
+
+  a) In the portal: pg-covisor-prod > Restore
+     Choose a point in time from the last hour.
+     Restore to a NEW server: pg-covisor-prod-test-restore
+
+  b) Connect to the restored server and verify the schema looks correct.
+
+  c) DELETE the test server immediately (it costs money):
+     az postgres flexible-server delete \
+       --name pg-covisor-prod-test-restore \
+       --resource-group $RG --yes
+
+
+===============================================================================
+STEP 17  —  PRE-LAUNCH CHECKLIST
+===============================================================================
+
+IDENTITY & ACCESS
+[ ] Azure admin account has MFA enabled.
+[ ] CI identity (covisor-ci) is Contributor on rg-covisor-prod only.
+[ ] No shared logins.
+
+NETWORK
+[ ] Postgres firewall: only Container App egress IPs + no Azure-services rule.
+[ ] TLS enforced on API (curl http:// fails), Postgres (non-SSL rejected), SWA.
+[ ] CORS on the API limited to https://<yourdomain> only.
+
+COMPUTE
+[ ] GET https://<CA_FQDN>/api/health returns {"ok":true}.
+[ ] Prod min replicas = 1.
+[ ] Security headers present (curl -I https://<CA_FQDN>/api/health).
+[ ] No secret in plain env vars (check revision details in portal).
+
+DATABASE
+[ ] require_secure_transport = ON verified.
+[ ] App connects as covisorapp (not the admin role).
+[ ] A test restore has been completed and timed (Step 16).
+
+SECRETS
+[ ] All secrets in Container App secret store. None in repo or image.
+[ ] .env files are in .gitignore and not committed.
+
+FRONTEND
+[ ] Site loads on custom domain over HTTPS.
+[ ] Security headers present.
+[ ] No secret key in the JS bundle (grep the dist/ output).
+
+WEBHOOKS
+[ ] Plaid webhook URL registered and tested.
+[ ] Stripe webhook URL registered and tested (use Stripe CLI to replay).
+
+OBSERVABILITY
+[ ] Logs visible in Log Analytics workspace.
+[ ] API 5xx alert fires to your email (test by deploying a bad version).
+[ ] Postgres storage and CPU alerts configured.
+[ ] $60/month budget alert configured.
+
+DISASTER RECOVERY
+[ ] Test restore completed (Step 16).
+[ ] DR runbook written: how to rebuild from scratch if everything is deleted.
+
+
+===============================================================================
+FILL-IN TABLE  —  RECORD VALUES HERE AS YOU GO
+===============================================================================
+
+  Region (confirmed) ......................
+  Subscription ID .........................
+  Resource group (prod) ................... rg-covisor-prod
+  Resource group (dev) .................... rg-covisor-dev
+  Container Apps environment .............. cae-covisor-prod
+  Container App FQDN ......................
+  Static Web App URL ......................
+  Custom domain ...........................
+  Postgres server host .................... pg-covisor-prod.postgres.database.azure.com
+  Postgres app role ....................... covisorapp
+  Container Apps egress IPs ...............
+  GitHub org ..............................
+  GHCR image path ......................... ghcr.io/<org>/covisor-api
+  Entra tenant domain .....................
+  Entra tenant ID .........................
+  Entra API app client ID (= ENTRA_AUDIENCE)
+  Entra web app client ID .................
+  CI app registration client ID ...........
+  Stripe publishable key ..................
+  Plaid environment ....................... production
+
+  SECRETS (store in password manager, NOT here):
+  PG admin password .......................  [in password manager]
+  PG app password .........................  [in password manager]
+  TOKEN_ENC_KEY ...........................  [in Container App secrets]
+  AUDIT_IP_SALT ...........................  [in Container App secrets]
+  PLAID_SECRET ............................  [in Container App secrets]
+  STRIPE_SECRET_KEY .......................  [in Container App secrets]
+  STRIPE_WEBHOOK_SECRET ...................  [in Container App secrets]
+  GHCR read PAT ...........................  [in Container App secrets]
+  GHCR write PAT ..........................  [in GitHub Actions secrets]
+
+
+===============================================================================
+ESTIMATED MONTHLY COST SUMMARY
+===============================================================================
+
+  Container App (1 replica, 0.5 vCPU, 1 GiB)  ~$8-12
+  PostgreSQL Flexible Server (B1ms, 32 GiB)    ~$15-22
+  Log Analytics (30-day, <1 GB/day)            ~$3-8
+  Static Web App (Free tier)                    $0
+  GitHub Container Registry                     $0
+  Budget headroom                               ~$5
+  -----------------------------------------------
+  TOTAL ESTIMATED                               ~$31-47 / month
+
+===============================================================================
+END OF DOCUMENT
+===============================================================================

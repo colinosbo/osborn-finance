@@ -8,7 +8,7 @@
 export const SUBSCRIPTION_RE = /STEAM ?GAMES|STEAMGAMES|STEAMPOWERED|APPLE[ .]?COM[ \/]?BILL|APPLE MEDIA|ITUNES|CLAUDE|ANTHROPIC|OPENAI|CHATGPT|LINKEDIN|RESUME\.CO|CCLEANER|AMAZON PRIME|PRIME VIDEO|NETFLIX|SPOTIFY|\bHULU\b|DISNEY ?PLUS|DISNEY\+|\bHBO\b|PARAMOUNT\+|PEACOCK|YOUTUBE ?PREM|YOUTUBE ?TV|AUDIBLE|ADOBE|MICROSOFT 365|OFFICE 365|DROPBOX|NOTION|CANVA|PATREON|SUBSTACK|\bNYT\b|\bWSJ\b|TWITCH|NORDVPN|EXPRESSVPN|1PASSWORD|LASTPASS|GITHUB|GOOGLE ONE|ICLOUD|DASHPASS/;
 
 const RULES: Array<[RegExp, string]> = [
- [/PAYROLL|DIRECT DEP|DIR DEP|IL STATE UNIV ACH|INTEREST PAID|IRS TREAS|TAX REF|KASASA ATM REFUND|ACCTVERIFY 840|VSA RTN/, 'Income & Refunds'],
+ [/PAYROLL|DIRECT DEP|DIR DEP|IL STATE UNIV ACH|INTEREST PAID|IRS TREAS|TAX REF|KASASA ATM REFUND|ACCTVERIFY 840/, 'Income'],
  // Credit card payments: issuer names + generic phrasing across banks.
  [/CREDIT CARD|CARD ?PAYMENT|CARD ?PMT|CRD ?PMT|CRDPMT|CC ?PYMT|CC ?PMT|CARDMEMBER|CHASE (CARD|CREDIT|CRD)|\bAMEX\b|AMERICAN EXPRESS|BANKAMERICARD|SYNCHRONY|BARCLAY|CITI ?CARD|CITICARD|COMENITY|BREAD FINANCIAL|DISCOVER.*(E-?PAY|PAYMENT|PMT)|DISCOVER E-PAYMENT|CAPITAL ONE|EPAYMENT|VISA.*(PMT|PAYMENT)|MASTERCARD/, 'Credit Card Payments'],
  [/PAY OFF LOAN|TRANSFER TO LOANS|LOAN ?PMT|LOAN PAYMENT|STUDENT ?LOAN|NELNET|GREAT LAKES|MOHELA|SALLIE MAE|NAVIENT|FEDLOAN|AIDVANTAGE|\bSOFI\b|UPSTART|LENDING ?CLUB|MORTGAGE|MR COOPER|ROCKET ?MORT|FREEDOM MTG|CALIBER HOME/, 'Loan Payments'],
@@ -35,7 +35,16 @@ const RULES: Array<[RegExp, string]> = [
  [/SPORT CLIPS|CSC SERVICEWORK|GREAT CLIPS|SUPERCUTS|\bSALON\b|BARBER|\bNAIL\b|\bSPA\b|MASSAGE|LAUNDR|DRY CLEAN/, 'Personal Care'],
  [/VENMO|CASH ?APP|\bZELLE\b|PAYPAL|PHTFRDDA|PHONE TFR|APPLE CASH/, 'P2P & Transfers']
 ];
-export const ALL_CATS = ['Rent & Housing','Loan Payments','P2P & Transfers','Education','Credit Card Payments','Shopping','Groceries & Household','Legal & Court','Dining & Fast Food','Insurance','Utilities & Bills','Gas & Convenience','Entertainment','Savings & Investments','Subscriptions & Digital','Health & Pharmacy','Gym & Fitness','Auto','Cash Withdrawals','Vape & Tobacco','Bars & Nightlife','Personal Care','Fees','Taxes','Other','Income & Refunds'];
+export const ALL_CATS = ['Rent & Housing','Loan Payments','P2P & Transfers','Education','Credit Card Payments','Shopping','Groceries & Household','Legal & Court','Dining & Fast Food','Insurance','Utilities & Bills','Gas & Convenience','Entertainment','Savings & Investments','Subscriptions & Digital','Health & Pharmacy','Gym & Fitness','Auto','Cash Withdrawals','Vape & Tobacco','Bars & Nightlife','Personal Care','Fees','Taxes','Other','Income','Refunds'];
+
+// The refund category: money handed back for a purchase (a return/reversal/credit).
+// It stays in the ledger but is NEVER counted as income — see isIncome below.
+export const REFUND_CAT = 'Refunds';
+// An inflow that counts toward TOTAL INCOME: real money in, minus refunds. Use this
+// everywhere an "income" figure is summed so a buy-then-refund (or any return) never
+// inflates income. Paired refunds are also stripped upstream by refund netting; this
+// additionally covers refunds we recognize by descriptor but couldn't pair to a charge.
+export const isIncome = (t: { amount: number; category: string }) => t.amount > 0 && t.category !== REFUND_CAT;
 
 // "Money movement", not consumption: paying down debt, moving cash to savings/
 // investments, or transferring between your own accounts. These are excluded from
@@ -90,8 +99,8 @@ const PFC_DETAILED: Record<string, string> = {
   GENERAL_MERCHANDISE_CONVENIENCE_STORES: 'Gas & Convenience'
 };
 const PFC_PRIMARY: Record<string, string> = {
-  INCOME: 'Income & Refunds',
-  TRANSFER_IN: 'Income & Refunds',
+  INCOME: 'Income',
+  TRANSFER_IN: 'Income',
   TRANSFER_OUT: 'P2P & Transfers',
   LOAN_PAYMENTS: 'Loan Payments',
   BANK_FEES: 'Fees',
@@ -114,13 +123,27 @@ export function classifyFromPlaid(pfc?: { primary?: string; detailed?: string } 
   return null;
 }
 
+// Real-income signals: earnings/benefits that are income even when the word "refund"
+// or "return" appears (a TAX REFUND is income, not a merchandise return). Checked first.
+const INCOME_RE = /PAYROLL|GUSTO|\bADP\b|PAYCHEX|PAYCOM|RIPPLING|JUSTWORKS|TRINET|SALARY|\bWAGES\b|DIRECT DEP|DIR DEP|PAYCHECK|IL STATE UNIV ACH|INTEREST|DIVIDEND|\bIRS\b|TAX REF|TAX RETURN|\bTREAS\b|PENSION|ANNUITY|\bSSA\b|SOCIAL SECURITY|UNEMPLOY|KASASA ATM REFUND|ACCTVERIFY 840/;
+// Refund signals: money handed back for a purchase (return / reversal / credit). These
+// inflows stay in the ledger but are categorized 'Refunds' and excluded from income.
+const REFUND_RE = /\bREFUND(ED)?\b|\bRETURN(ED|S)?\b|\bREVERSAL\b|\bREVERSED\b|\bCHARGEBACK\b|MERCHANDISE CREDIT|CREDIT VOUCHER|\bRTN\b|\bRMA\b/;
+// Does a descriptor read as genuine earnings/benefits (payroll, interest, tax refund,
+// benefits)? Used by refund netting to avoid cancelling REAL income against a same-
+// amount expense — only generic, non-income credits are eligible for amount matching.
+export const looksLikeIncome = (desc: string) => INCOME_RE.test(String(desc).toUpperCase());
+
 export function classify(desc: string, amt: number): string {
-  // LOG-2 (intentional simplification): all inflows — payroll, interest, refunds,
-  // merchant credits — land in 'Income & Refunds'. Splitting refunds back into
-  // their spending category is a Phase-6 enhancement (needs original-purchase
-  // matching to avoid double-counting income).
-  if (amt > 0) return 'Income & Refunds';
   const u = String(desc).toUpperCase();
+  // Inflows split into real income vs a refund (money back for something bought).
+  // Income wins when both could match (e.g. a tax refund); any other inflow is income.
+  // A refund is still kept in the ledger — it's just never counted toward income.
+  if (amt > 0) {
+    if (INCOME_RE.test(u)) return 'Income';
+    if (REFUND_RE.test(u)) return REFUND_CAT;
+    return 'Income';
+  }
   for (const [re, cat] of RULES) if (re.test(u)) return cat;
   return 'Other';
 }

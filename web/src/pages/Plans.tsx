@@ -5,8 +5,8 @@ import { Icon, type IconName } from '../icons';
 import type { Toast } from '../App';
 
 const FEATURES: Record<string, string[]> = {
-  personal: ['1 linked bank account', 'Full dashboard, ledger & reports', 'AI Advisor with savings tips', 'Subscription tracker + bill-increase alerts', 'Savings goals with on-pace projections', 'CSV import & data export'],
-  family: ['Up to 5 linked banks', 'All accounts grouped together', 'Weekly to yearly report PDFs', 'Subscription & price-hike tracking across accounts', 'Shared savings goals', 'Everything in Personal'],
+  personal: ['1 linked bank account', 'Full dashboard, ledger & reports', 'AI Advisor with savings tips', 'Subscription tracker + bill-increase alerts', 'CSV import & data export'],
+  family: ['Up to 5 linked banks', 'All accounts grouped together', 'Weekly to yearly report PDFs', 'Subscription & price-hike tracking across accounts', 'Everything in Personal'],
   enterprise: ['Unlimited linked banks', 'Full data export & audit history', 'Priority email support', 'Early access to new features', 'Everything in Personal+']
 };
 // Monthly list price per tier. Annual billing gives 2 months free (pay for 10).

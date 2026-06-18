@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { usePlaidLink } from 'react-plaid-link';
 import { api, fmt, fmt0, planLabel } from '../api';
-import { isSignedIn } from '../auth';
+import { useAuth0 } from '@auth0/auth0-react';
 import DebtPlan from '../DebtPlan';
 import type { Toast } from '../App';
 
@@ -31,6 +31,7 @@ const isLiability = (t?: string) => /credit|loan|mortgage|student|line of credit
 
 export default function Accounts({ toast }: { toast: Toast }) {
   const navigate = useNavigate();
+  const { isAuthenticated, loginWithRedirect } = useAuth0();
   const [plan, setPlan] = useState<string>('…');
   const [data, setData] = useState<AcctResp>({ items: [], accounts: [] });
   const [linkToken, setLinkToken] = useState<string | null>(null);
@@ -54,7 +55,7 @@ export default function Accounts({ toast }: { toast: Toast }) {
   };
   const connect = async () => {
     // Adding a bank requires an account: gate behind sign in / create account first.
-    if (!isSignedIn()) { navigate(`/signin?next=${encodeURIComponent('/accounts')}`); return; }
+    if (!isAuthenticated) { loginWithRedirect({ appState: { returnTo: '/accounts' } }); return; }
     // No plan yet (or plan limit reached): send them to pick a plan instead of erroring.
     if (plan === 'free') { navigate('/plans'); return; }
     try {

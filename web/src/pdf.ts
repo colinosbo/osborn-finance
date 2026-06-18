@@ -13,8 +13,8 @@ const JSPDF_URLS = [
   'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js'
 ];
 
-interface Kpi { value: number; prev: number; delta: number; pct: number | null }
-interface Cat { name: string; total: number; count: number; prev: number; delta: number; share: number }
+interface Kpi { value: number; prev: number; delta: number | null; pct: number | null }
+interface Cat { name: string; total: number; count: number; prev: number; delta: number | null; share: number }
 interface Tip { icon: string; title: string; text: string; savePerMonth: number; pinned?: boolean }
 interface Big { date: string; name: string; merchant: string; amount: number; category: string; count?: number }
 export interface ReportPDFData {
@@ -103,7 +103,7 @@ export async function generateReportPDF(rep: ReportPDFData, opts: PDFOpts = {}):
   const sectionHead = (label: string) => { ensure(60); y += 10; font('bold', 13.5, INK); T(label, M, y); doc.setFillColor(...VIOLET); doc.rect(M, y + 7, 26, 2.4, 'F'); y += 24; };
   const tri = (x: number, yy: number, up: boolean, c: RGB) => { doc.setFillColor(...c); if (up) doc.triangle(x, yy - 6.5, x - 3.4, yy - 1, x + 3.4, yy - 1, 'F'); else doc.triangle(x - 3.4, yy - 6.5, x + 3.4, yy - 6.5, x, yy - 1, 'F'); };
   const deltaInfo = (k: Kpi, goodUp: boolean, rate = false) => {
-    if (!k.prev && !k.delta) return { up: null as boolean | null, s: 'no prior data', c: FAINT };
+    if (k.delta == null || (!k.prev && !k.delta)) return { up: null as boolean | null, s: 'no prior data', c: FAINT };
     const up = k.delta >= 0, good = up === goodUp;
     const s = (rate ? `${k.delta > 0 ? '+' : ''}${k.delta} pts` : `${k.delta > 0 ? '+' : ''}${money0(k.delta)}`) + (k.pct != null && !rate ? ` (${k.pct > 0 ? '+' : ''}${k.pct}%)` : '');
     return { up, s, c: good ? GREEN : RED };
@@ -207,7 +207,7 @@ export async function generateReportPDF(rep: ReportPDFData, opts: PDFOpts = {}):
       font('normal', 9, FAINT); T(`${c.share}%`, RIGHT - 16, top + 9, { align: 'right' });
       doc.setFillColor(...HAIR); doc.rect(M + 16, top + 17, CW - 32, 5, 'F');
       doc.setFillColor(r, g, b); doc.rect(M + 16, top + 17, Math.max(2, (CW - 32) * Math.min(1, c.share / 100)), 5, 'F');
-      if (c.delta) { const bad = c.delta > 0; font('normal', 8, bad ? RED : GREEN); T(`${bad ? '+' : '-'}${money0(Math.abs(c.delta))} vs prior`, M + 16, top + 33); }
+      if (c.delta != null && c.delta !== 0) { const bad = c.delta > 0; font('normal', 8, bad ? RED : GREEN); T(`${bad ? '+' : '-'}${money0(Math.abs(c.delta))} vs prior`, M + 16, top + 33); }
     });
   }
 

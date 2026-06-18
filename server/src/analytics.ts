@@ -1,6 +1,6 @@
 // Summary + Advisor engines (server-side ports of the app logic).
 import type { Tx } from './store.js';
-import { isMovement } from './classifier.js';
+import { isMovement, isIncome } from './classifier.js';
 
 // Window is [from (exclusive), to (inclusive)]. Empty `from` = no lower bound (all
 // time); empty `to` = up to the latest data. The route computes from/to for both a
@@ -8,7 +8,7 @@ import { isMovement } from './classifier.js';
 export function summarize(tx: Tx[], from: string, to: string) {
   const anchor = to || (tx.length ? tx[tx.length - 1].date : new Date().toISOString().slice(0, 10));
   const cur = tx.filter(t => (!from || t.date > from) && (!to || t.date <= to));
-  const income = cur.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
+  const income = cur.filter(isIncome).reduce((s, t) => s + t.amount, 0);
   // Spending = consumption only. Money movement (debt payoff, transfers, saving) is
   // not spending, so it's excluded from the totals, the donut, and top merchants.
   const isSpend = (t: Tx) => t.amount < 0 && !isMovement(t.category);
@@ -27,7 +27,7 @@ export function summarize(tx: Tx[], from: string, to: string) {
   for (const t of cur) {
     const k = t.date.slice(0, 7);
     months[k] = months[k] || { in: 0, out: 0 };
-    if (t.amount > 0) months[k].in += t.amount; else if (isSpend(t)) months[k].out += Math.abs(t.amount);
+    if (isIncome(t)) months[k].in += t.amount; else if (isSpend(t)) months[k].out += Math.abs(t.amount);
   }
   return {
     hasAny: tx.length > 0,
@@ -73,7 +73,7 @@ export function avgMonthly(tx: Tx[], latest: string) {
 export function advise(tx: Tx[], days: number, latest: string) {
   const cutoff = days ? shift(latest, -days) : '';
   const cur = cutoff ? tx.filter(t => t.date > cutoff) : tx;
-  const income = cur.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
+  const income = cur.filter(isIncome).reduce((s, t) => s + t.amount, 0);
   // Spending = consumption only (exclude debt payoff / transfers / saving).
   const spend = Math.abs(cur.filter(t => t.amount < 0 && !isMovement(t.category)).reduce((s, t) => s + t.amount, 0));
   const dates = cur.map(t => t.date).sort();

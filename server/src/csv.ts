@@ -69,14 +69,14 @@ export function debitCreditSign(v: unknown): -1 | 0 | 1 {
   return 0;
 }
 
-export interface ColMap { headers: string[]; date: number; desc: number; amt: number; debit: number; credit: number; bal: number; dir: number; }
+export interface ColMap { headers: string[]; date: number; desc: number; amt: number; debit: number; credit: number; bal: number; dir: number; acct: number; }
 export function autoMap(rows: string[][]): ColMap {
   const headers = rows[0].map(h => String(h || '').trim());
   const data = rows.slice(1, 21);
-  const score = { date: [] as number[], desc: [] as number[], amt: [] as number[], bal: [] as number[], debit: [] as number[], credit: [] as number[], dir: [] as number[] };
+  const score = { date: [] as number[], desc: [] as number[], amt: [] as number[], bal: [] as number[], debit: [] as number[], credit: [] as number[], dir: [] as number[], acct: [] as number[] };
   for (let c = 0; c < headers.length; c++) {
     const h = headers[c].toLowerCase();
-    let dateS = 0, amtS = 0, descS = 0, balS = 0, debS = 0, credS = 0, dirS = 0;
+    let dateS = 0, amtS = 0, descS = 0, balS = 0, debS = 0, credS = 0, dirS = 0, acctS = 0;
     if (/date|posted/.test(h)) dateS += 3;
     if (/amount|\bamt\b/.test(h)) amtS += 3;
     if (/balance|running/.test(h)) balS += 4;
@@ -84,6 +84,10 @@ export function autoMap(rows: string[][]): ColMap {
     if (/debit|withdraw/.test(h)) debS += 4;
     if (/credit|deposit/.test(h) && !/card/.test(h)) credS += 4;
     if (/\btype\b|debit.{0,3}credit|cr.?dr/.test(h)) dirS += 2;
+    // Which of the user's accounts a row belongs to (header-driven; the values are
+    // free text like "Checking (0114)" so content can't reliably distinguish it
+    // from the description). Avoid "account number" columns.
+    if (/\baccount\b|\bacct\b/.test(h) && !/number|num\b|no\.?$|#/.test(h)) acctS += 5;
     let dateHit = 0, numHit = 0, negHit = 0, lenSum = 0, filled = 0, dirHit = 0;
     for (const r of data) {
       const v = r[c];
@@ -107,7 +111,7 @@ export function autoMap(rows: string[][]): ColMap {
       descS += Math.min(3, lenSum / filled / 12);
     }
     score.date.push(dateS); score.desc.push(descS); score.amt.push(amtS);
-    score.bal.push(balS); score.debit.push(debS); score.credit.push(credS); score.dir.push(dirS);
+    score.bal.push(balS); score.debit.push(debS); score.credit.push(credS); score.dir.push(dirS); score.acct.push(acctS);
   }
   const best = (arr: number[], excl: number[], min: number) => {
     let bi = -1, bv = min;
@@ -119,11 +123,12 @@ export function autoMap(rows: string[][]): ColMap {
   // A direction column (>60% debit/credit words) means the amount is positive-only
   // and the sign lives elsewhere; detect it before deciding how to read amounts.
   const dir = best(score.dir, [date, bal], 3);
-  let amt = best(score.amt, [date, bal, dir], 2);
+  const acct = best(score.acct, [date, bal, dir], 3);
+  let amt = best(score.amt, [date, bal, dir, acct], 2);
   // With a direction column present the amount column can be all-positive, so it
   // may not clear the usual threshold; recover the strongest numeric column.
-  if (amt < 0 && dir >= 0) amt = best(score.amt, [date, bal, dir], 1);
-  const desc = best(score.desc, [date, bal, amt, dir], 1);
+  if (amt < 0 && dir >= 0) amt = best(score.amt, [date, bal, dir, acct], 1);
+  const desc = best(score.desc, [date, bal, amt, dir, acct], 1);
   let debit = -1, credit = -1;
   // Only look for separate debit/credit AMOUNT columns when there's neither a
   // single signed amount column nor a direction column to sign a positive amount.
@@ -131,5 +136,5 @@ export function autoMap(rows: string[][]): ColMap {
     debit = best(score.debit, [date, bal, desc], 3.5);
     credit = best(score.credit, [date, bal, desc, debit], 3.5);
   }
-  return { headers, date, desc, amt, debit, credit, bal, dir };
+  return { headers, date, desc, amt, debit, credit, bal, dir, acct };
 }

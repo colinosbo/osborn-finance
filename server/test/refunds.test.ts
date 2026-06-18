@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import { detectRefunds, withoutRefunds } from '../src/refunds.js';
 import type { Tx } from '../src/store.js';
 
-// Minimal Tx factory — detectRefunds only reads id, amount, merchant, name, date.
 let n = 0;
 const tx = (p: Partial<Tx> & { amount: number; date: string }): Tx => ({
   id: p.id ?? `t${++n}`,
@@ -39,7 +38,7 @@ describe('refund netting (detectRefunds)', () => {
   it('ignores refunds beyond the 60-day window', () => {
     const rows = [
       tx({ merchant: 'Walmart', amount: -50, date: '2026-01-10' }),
-      tx({ merchant: 'Walmart', amount: 50, date: '2026-04-01' }) // ~81 days later
+      tx({ merchant: 'Walmart', amount: 50, date: '2026-04-01' })
     ];
     expect(detectRefunds(rows).nettedIds.size).toBe(0);
   });
@@ -81,5 +80,68 @@ describe('refund netting (detectRefunds)', () => {
     ];
     const kept = withoutRefunds(rows).map(t => t.id).sort();
     expect(kept).toEqual(['keep1', 'keep2']);
+  });
+
+  it('nets an unlisted vendor whose charge/refund descriptors differ by direction + RETURN', () => {
+    const rows = [
+      tx({ id: 'c', merchant: 'Withdrawal Debit Card', name: 'Withdrawal DEBIT CARD THE ITEM SHOP CHICAGO IL', amount: -89.99, date: '2026-05-03' }),
+      tx({ id: 'r', merchant: 'Deposit Debit Card', name: 'Deposit DEBIT CARD THE ITEM SHOP CHICAGO IL RETURN', amount: 89.99, date: '2026-05-13' })
+    ];
+    expect([...detectRefunds(rows).nettedIds].sort()).toEqual(['c', 'r']);
+  });
+
+  it('nets the same chain across two different store locations', () => {
+    const rows = [
+      tx({ id: 'c', merchant: 'Walmart', name: 'POS WM SUPERCENTER #1256 JOLIET IL', amount: -50, date: '2026-05-01' }),
+      tx({ id: 'r', merchant: 'Walmart', name: 'DEBIT CARD WAL-MART #4529 NEW LENOX IL', amount: 50, date: '2026-05-09' })
+    ];
+    expect([...detectRefunds(rows).nettedIds].sort()).toEqual(['c', 'r']);
+  });
+
+  it('still does not net two genuinely different vendors at the same amount', () => {
+    const rows = [
+      tx({ id: 'c', merchant: '', name: 'Withdrawal DEBIT CARD JOLIET CAFE JOLIET IL', amount: -25, date: '2026-05-01' }),
+      tx({ id: 'r', merchant: '', name: 'Deposit DEBIT CARD CREST HILL DINER CREST HILL IL', amount: 25, date: '2026-05-05' })
+    ];
+    expect(detectRefunds(rows).nettedIds.size).toBe(0);
+  });
+});
+
+describe('refund netting — amount-only fallback for anonymous deposits', () => {
+  // The reported case: a $1077 check payment to a vendor, refunded a month later as a
+  // generic "MOBILE DEPOSIT" (a redeposited check) with NO merchant identity. No shared
+  // vendor and no refund keyword — only the exact amount + time order link them.
+  it('nets a charge against a later same-amount generic deposit (no shared vendor)', () => {
+    const rows = [
+      tx({ id: 'c', name: 'LINCOLN LAND COM LINCOLN LA', amount: -1077, date: '2026-05-13', category: 'Education' }),
+      tx({ id: 'r', name: 'MOBILE DEPOSIT', amount: 1077, date: '2026-06-16' }),
+    ];
+    expect([...detectRefunds(rows).nettedIds].sort()).toEqual(['c', 'r']);
+  });
+
+  it('does NOT amount-match a deposit that NAMES a different merchant', () => {
+    // A credit that identifies a store ("Target") must only match that store, never a
+    // same-amount charge elsewhere — otherwise unrelated activity cancels out.
+    const rows = [
+      tx({ id: 'c', merchant: 'Walmart', name: 'WALMART', amount: -60, date: '2026-05-01' }),
+      tx({ id: 'r', merchant: 'Target', name: 'TARGET REFUND', amount: 60, date: '2026-05-10' }),
+    ];
+    expect(detectRefunds(rows).nettedIds.size).toBe(0);
+  });
+
+  it('does NOT amount-match a generic deposit with no matching prior expense', () => {
+    const rows = [
+      tx({ id: 'c', name: 'LINCOLN LAND COM LINCOLN LA', amount: -1077, date: '2026-05-13', category: 'Education' }),
+      tx({ id: 'r', name: 'MOBILE DEPOSIT', amount: 500, date: '2026-06-16' }), // different amount
+    ];
+    expect(detectRefunds(rows).nettedIds.size).toBe(0);
+  });
+
+  it('does NOT cancel real income (payroll) even via a deposit of a matching amount', () => {
+    const rows = [
+      tx({ id: 'c', name: 'SOME STORE', amount: -2000, date: '2026-05-01', category: 'Shopping' }),
+      tx({ id: 'r', name: 'DIRECT DEP PAYROLL ACME', amount: 2000, date: '2026-05-15' }),
+    ];
+    expect(detectRefunds(rows).nettedIds.size).toBe(0);
   });
 });

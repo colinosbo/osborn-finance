@@ -33,6 +33,8 @@ export default function Ledger({ toast }: { toast: Toast }) {
   const [open, setOpen] = useState<string | null>(params.get('open'));
   const [hasData, setHasData] = useState<boolean | null>(null);
   const [hasBank, setHasBank] = useState(false);
+  const [accounts, setAccounts] = useState<string[]>([]);
+  const [acctFilter, setAcctFilter] = useState('');
   const LIMIT = 25;
 
   // paginated list (list mode)
@@ -40,9 +42,10 @@ export default function Ledger({ toast }: { toast: Toast }) {
     const p = new URLSearchParams({ limit: String(LIMIT), offset: String(page * LIMIT) });
     applyRange(p, range);
     if (cat) p.set('cat', cat); if (flow) p.set('flow', flow); if (q) p.set('q', q);
+    if (acctFilter) p.set('accounts', acctFilter);
     if (amtSort) { p.set('sort', 'amount'); p.set('dir', amtSort); }
     api<{ rows: Tx[]; total: number }>(`/api/transactions?${p}`).then(r => { setRows(r.rows); setTotal(r.total); });
-  }, [page, cat, flow, q, range, amtSort]);
+  }, [page, cat, flow, q, range, amtSort, acctFilter]);
   // Cycle the Amount-column sort: default → highest first → lowest first → default.
   const cycleAmtSort = () => { setPage(0); setAmtSort(s => s === '' ? 'desc' : s === 'desc' ? 'asc' : ''); };
   // full pull for grouping (grouped mode)
@@ -50,11 +53,12 @@ export default function Ledger({ toast }: { toast: Toast }) {
     const p = new URLSearchParams({ limit: '200' });
     applyRange(p, range);
     if (cat) p.set('cat', cat); if (flow) p.set('flow', flow); if (q) p.set('q', q);
+    if (acctFilter) p.set('accounts', acctFilter);
     api<{ rows: Tx[] }>(`/api/transactions?${p}`).then(r => setAllRows(r.rows));
-  }, [cat, flow, q, range]);
+  }, [cat, flow, q, range, acctFilter]);
 
   useEffect(() => { if (grouped) loadAll(); else load(); }, [grouped, load, loadAll]);
-  useEffect(() => { api<string[]>('/api/categories').then(setCats); api<string[]>('/api/tx-categories').then(setUsedCats); }, []);
+  useEffect(() => { api<string[]>('/api/categories').then(setCats); api<string[]>('/api/tx-categories').then(setUsedCats); api<string[]>('/api/tx-accounts').then(setAccounts).catch(() => {}); }, []);
   // detect whether the account has any transactions at all (unfiltered),
   // and whether a bank is connected (so we can tell "no bank" from "still syncing").
   useEffect(() => {
@@ -88,6 +92,9 @@ export default function Ledger({ toast }: { toast: Toast }) {
     try {
       const r = await api<{ updated: number; total: number }>('/api/transactions/reclassify', { method: 'POST' });
       toast(`Re-categorized ${r.updated} of ${r.total} transactions`);
+      // BUG-4 fix: refresh the category filter after reclassify so newly-assigned
+      // categories appear in the dropdown without requiring a full page reload.
+      api<string[]>('/api/tx-categories').then(setUsedCats);
       grouped ? loadAll() : load();
     } catch (e) { toast((e as Error).message); }
   };
@@ -124,6 +131,12 @@ export default function Ledger({ toast }: { toast: Toast }) {
             <button className={'seg-btn' + (!grouped ? ' active' : '')} onClick={() => setGrouped(false)}>List</button>
             <button className={'seg-btn' + (grouped ? ' active' : '')} onClick={() => { setGrouped(true); setOpen(null); }}>Grouped</button>
           </div>
+          {accounts.length > 1 && (
+            <select value={acctFilter} onChange={e => { setAcctFilter(e.target.value); setPage(0); }}>
+              <option value="">All accounts</option>
+              {accounts.map(a => <option key={a} value={a}>{a}</option>)}
+            </select>
+          )}
           <select value={cat} onChange={e => { setCat(e.target.value); setPage(0); }}>
             <option value="">All categories</option>
             {usedCats.map(c => <option key={c}>{c}</option>)}
@@ -166,7 +179,10 @@ export default function Ledger({ toast }: { toast: Toast }) {
               </tbody>
             </table>
             <div className="controls" style={{ marginTop: 16, marginBottom: 0, justifyContent: 'center' }}>
-              <span style={{ color: 'var(--faint)', fontSize: 12 }}>{groups.length} merchants · {allRows.length} transactions (most recent 200)</span>
+              <span style={{ color: 'var(--faint)', fontSize: 12 }}>
+                {groups.length} merchants · {allRows.length} transactions
+                {allRows.length >= 2000 && <span style={{ color: 'var(--red)', marginLeft: 6 }}>· limit reached — narrow the date range to see all groups</span>}
+              </span>
             </div>
           </div>
         ) : (

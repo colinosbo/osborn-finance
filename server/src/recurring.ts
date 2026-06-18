@@ -2,6 +2,8 @@
 // regular cadence for a consistent amount, decides which are still ACTIVE, and
 // computes monthly/annual cost. Pure function over the user's transactions.
 import type { Tx } from './store.js';
+import { isIncome, looksLikeIncome } from './classifier.js';
+import { withoutRefunds } from './refunds.js';
 
 // A detected change in a subscription's per-charge price (a "bill increase" or
 // the rarer decrease). previousAmount/currentAmount are positive dollar figures.
@@ -53,10 +55,12 @@ function cadenceFor(days: number): { label: string; period: number } | null {
 const NON_SUBSCRIPTION_CATS = new Set([
   // Moving your own money / income / taxes / legal obligations — not a subscription.
   'Loan Payments', 'Credit Card Payments', 'Savings & Investments', 'P2P & Transfers',
-  'Income & Refunds', 'Taxes', 'Cash Withdrawals', 'Fees', 'Legal & Court',
+  'Income', 'Refunds', 'Taxes', 'Cash Withdrawals', 'Fees', 'Legal & Court',
   // Consumption of goods, where several similar-priced visits are coincidence, not a
-  // recurring plan (e.g. four ~$19 lunches). Real subscriptions don't live here.
-  'Dining & Fast Food', 'Gas & Convenience', 'Groceries & Household', 'Shopping', 'Bars & Nightlife'
+  // recurring plan (e.g. four ~$19 lunches, or repeat smoke-shop runs). Real
+  // subscriptions don't live here.
+  'Dining & Fast Food', 'Gas & Convenience', 'Groceries & Household', 'Shopping', 'Bars & Nightlife',
+  'Vape & Tobacco'
 ]);
 
 // Tokens that are billing / geographic / descriptor noise rather than a brand, used
@@ -75,7 +79,7 @@ const BRAND_STOP = new Set([
   'SYSTEMS', 'CREATIVE', 'CLOUD', 'PREMIUM', 'PREM', 'PLUS', 'APP', 'BUNDLE', 'DIGITAL',
   'ACCESS', 'PLAN', 'STORAGE', 'RENEWAL', 'SUBSCRIPTION', 'MEMBERSHIP', 'PRO', 'BASIC',
   'STANDARD', 'MONTHLY', 'ANNUAL', 'RECURRING', 'PAYMENT', 'PURCHASE', 'ONLINE', 'STORE',
-  'CORP', 'SVC', 'SERVICES', 'LOS', 'GATOS'
+  'CORP', 'SVC', 'SERVICES', 'LOS', 'GATOS', 'CUPERTINO'
 ]);
 const brandTokens = (s: string) => String(s).toUpperCase().split(/[^A-Z]+/).filter(w => w.length >= 3 && !BRAND_STOP.has(w));
 
@@ -125,7 +129,22 @@ function clusterByVendor(rows: Tx[]): Array<[string, Tx[]]> {
     const top = Object.keys(cnt).sort((a, b) => b.length - a.length || cnt[b] - cnt[a])[0];
     return top ? top[0] + top.slice(1).toLowerCase() : (c.rows[0].merchant || c.rows[0].name);
   };
-  return clusters.map(c => [niceLabel(c), c.rows] as [string, Tx[]]);
+  // Prefer the cleaned merchant name shown everywhere else in the app (ledger,
+  // grouped view) so a subscription reads the SAME in every view — "Apple", not the
+  // descriptor's city "Cupertino". Use the most common usable merchant across the
+  // cluster's rows; only fall back to the raw brand-token label when no row carries a
+  // recognizable merchant.
+  const clusterLabel = (c: { rows: Tx[]; toks: string[] }) => {
+    const cnt: Record<string, number> = {};
+    for (const t of c.rows) {
+      const m = (t.merchant || '').trim();
+      if (!m || m.toLowerCase() === 'unknown') continue;
+      cnt[m] = (cnt[m] || 0) + 1;
+    }
+    const top = Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a] || a.length - b.length)[0];
+    return top || niceLabel(c);
+  };
+  return clusters.map(c => [clusterLabel(c), c.rows] as [string, Tx[]]);
 }
 
 // The category a cluster mostly falls in (charges for one vendor occasionally land in
@@ -145,7 +164,20 @@ export function detectRecurring(tx: Tx[], now?: string) {
   // keep EVERY charge (including any future-dated rows) so the billed-times count is the
   // TOTAL number of charges for a vendor; whether it's still ACTIVE is judged separately
   // against today, using only charges that have actually happened.
-  const eligible = tx.filter(t => t.amount < 0 && !NON_SUBSCRIPTION_CATS.has(t.category));
+  // INVARIANT: a subscription is money LEAVING your account on a schedule, so it can
+  // never come from income. We exclude income three ways, defense-in-depth, because a
+  // mislabeled or sign-flipped deposit (e.g. a paycheck whose debit/credit column was
+  // misread on CSV import, landing as a negative "Other" row) would otherwise look like
+  // a perfectly regular recurring charge: (1) it isn't an outflow, (2) the 'Income'
+  // category is ruled out, and (3) the descriptor doesn't read as earnings (payroll,
+  // direct deposit, interest, tax refund, benefits) per the canonical income signals.
+  const isIncomeLike = (t: Tx) => isIncome(t) || looksLikeIncome(`${t.merchant} ${t.name}`);
+  // A charge that was fully cancelled by a later refund isn't a recurring COST, even if
+  // it repeats on a clean cadence: e.g. a $500 airline ticket refunded $500 every month
+  // nets to $0. Refund netting already pairs those legs; drop the netted charges here so
+  // the surviving outflows don't masquerade as a $500/mo subscription. Pass the full set
+  // so cross-month pairs are found, exactly like the income/spend totals do.
+  const eligible = withoutRefunds(tx).filter(t => t.amount < 0 && !NON_SUBSCRIPTION_CATS.has(t.category) && !isIncomeLike(t));
   const groups = clusterByVendor(eligible);
 
   const subs: Recurring[] = [];
@@ -153,6 +185,11 @@ export function detectRecurring(tx: Tx[], now?: string) {
     if (allRaw.length < 3) continue;                       // need a real repeating history (3+)
     const all = [...allRaw].sort((a, b) => (a.date < b.date ? -1 : 1));
     const category = domCategory(all);
+    // Final income backstop: even after the row-level filter, an orphan charge can be
+    // attached to a cluster purely by matching amount (see clusterByVendor). Never let a
+    // cluster that resolves to income become a subscription — by category or by merchant
+    // name reading as earnings.
+    if (category === 'Income' || looksLikeIncome(merchant)) continue;
     const isSubCat = category === 'Subscriptions & Digital';
     // A subscription charges the SAME amount each time. Keep only the charges at the
     // dominant amount within a TIGHT tolerance (~2% or 50c), and require at least 3.
@@ -161,11 +198,6 @@ export function detectRecurring(tx: Tx[], now?: string) {
     const tol = Math.max(med * 0.02, 0.5);
     const charges = all.filter(t => Math.abs(Math.abs(t.amount) - med) <= tol);
     if (charges.length < 3) continue;                      // 3+ identical-amount charges
-    // The most recent charge that has actually happened as of today. Future-dated rows
-    // still count toward the total billed count, but only real (past) charges decide
-    // whether the subscription is still active and when it last / next bills.
-    const occurred = charges.map(c => c.date).filter(d => d <= today);
-    const lastOccurred = occurred.length ? occurred[occurred.length - 1] : null;
     // Cadence: gaps between same-amount charges must map to a known billing period.
     const gaps: number[] = [];
     for (let i = 1; i < charges.length; i++) gaps.push((Date.parse(charges[i].date) - Date.parse(charges[i - 1].date)) / DAY);
@@ -202,7 +234,6 @@ export function detectRecurring(tx: Tx[], now?: string) {
     const minAbs = isSubCat ? 0.5 : 1.5;
     let priceChange: PriceChange | undefined;
     let amount = r2(median(charges.map(t => Math.abs(t.amount))));
-    let lastCharged = lastOccurred || charges[charges.length - 1].date;
     if (earlierAmts.length >= 2 && recentCluster.length >= 1 && previousAmount > 0
         && Math.abs(delta) >= minAbs && Math.abs(pctChange) > minPct) {
       priceChange = {
@@ -214,8 +245,20 @@ export function detectRecurring(tx: Tx[], now?: string) {
       };
       // Reflect what the user pays NOW so totals and the next-charge estimate are current.
       amount = currentAmount;
-      lastCharged = lastOccurred || all[all.length - 1].date;
     }
+
+    // The recurring series is the same-amount cluster PLUS, when the price stepped, the
+    // charges at the NEW price — those fall outside the old tolerance band, so the median
+    // cluster above can't see them. Last charged / next charge / count / active must
+    // include them, otherwise the most recent bill is invisible: e.g. "Last 06/14" while
+    // the price already changed "Since 06/15" (a "since" later than "last" is impossible).
+    // Future-dated rows still count toward the total, but only charges that have actually
+    // happened (<= today) decide what's active and when it last / next bills.
+    const seriesCharges = priceChange ? [...charges, ...all.slice(j + 1)] : charges;
+    const seriesDates = seriesCharges.map(c => c.date).sort();
+    const occurred = seriesDates.filter(d => d <= today);
+    const lastOccurred = occurred.length ? occurred[occurred.length - 1] : null;
+    const lastCharged = lastOccurred || seriesDates[seriesDates.length - 1];
 
     // Active = it charged recently relative to TODAY (using the last real charge, never a
     // future-dated row). Period-aware with ~2 billing cycles of slack (about two months
@@ -224,9 +267,9 @@ export function detectRecurring(tx: Tx[], now?: string) {
     const confidence = Math.min(1, (charges.length >= 4 ? 0.6 : charges.length === 3 ? 0.45 : 0.3) + (spread < 0.2 ? 0.3 : spread < 0.4 ? 0.15 : 0) + (isSubCat ? 0.1 : 0));
     subs.push({
       merchant, category, amount, cadence: label, periodDays: Math.round(period),
-      monthlyCost: r2(amount * 30.44 / period), annualCost: r2(amount * 365 / period),
+      monthlyCost: r2(amount * 30.44 / period), annualCost: r2(amount * 30.44 / period * 12),
       lastCharged, nextCharge: shift(lastCharged, Math.round(period)),
-      count: charges.length, active, confidence: r2(confidence),
+      count: seriesCharges.length, active, confidence: r2(confidence),
       ...(priceChange ? { priceChange } : {})
     });
   }
@@ -249,3 +292,4 @@ export function detectRecurring(tx: Tx[], now?: string) {
     }
   };
 }
+// end of subscription / recurring-charge detection

@@ -1,11 +1,35 @@
-// API client. Dev auth: x-user-email header (Entra JWT in prod).
-const EMAIL_KEY = 'of_dev_email';
-export function getEmail() { return localStorage.getItem(EMAIL_KEY) || 'demo@covisor.com'; }
-export function setEmail(e: string) { localStorage.setItem(EMAIL_KEY, e); }
+// API client. Production auth: Auth0 Bearer JWT. Dev fallback: x-user-email header.
+const API_BASE = import.meta.env.VITE_API_URL || '';
+
+// Wired up by App once Auth0 is initialised. Returns the access token or null.
+let _getToken: (() => Promise<string | null>) | null = null;
+// Provides the Auth0 user's email for the x-user-email fallback (dev-mode server).
+let _getUserEmail: (() => string | null) | null = null;
+// Set to true once Auth0 has finished loading (isLoading=false), regardless of auth state.
+let _auth0Ready = false;
+export function setTokenGetter(fn: (() => Promise<string | null>) | null) { _getToken = fn; }
+export function setUserEmailGetter(fn: (() => string | null) | null) { _getUserEmail = fn; }
+export function setAuth0Ready(ready: boolean) { _auth0Ready = ready; }
+
 export async function api<T = unknown>(path: string, opts: { method?: string; body?: unknown; raw?: string } = {}): Promise<T> {
-  const res = await fetch(path, {
+  // Wait up to 3 s for Auth0 to finish loading before sending the request,
+  // so pages that call api() in useEffect([]) don't race Auth0's session restore.
+  if (!_auth0Ready) {
+    for (let i = 0; i < 30 && !_auth0Ready; i++) await new Promise(r => setTimeout(r, 100));
+  }
+  const headers: Record<string, string> = { 'Content-Type': opts.raw ? 'text/csv' : 'application/json' };
+
+  // Production: attach Auth0 access token as Bearer.
+  if (_getToken) {
+    try { const t = await _getToken(); if (t) headers['Authorization'] = `Bearer ${t}`; } catch { /* not signed in */ }
+  }
+  // Dev-mode server fallback: send x-user-email so AUTH_MODE=dev still works locally.
+  const email = _getUserEmail?.() || 'demo@covisor.com';
+  headers['x-user-email'] = email;
+
+  const res = await fetch(API_BASE + path, {
     method: opts.method || 'GET',
-    headers: { 'x-user-email': getEmail(), 'Content-Type': opts.raw ? 'text/csv' : 'application/json' },
+    headers,
     body: opts.raw ?? (opts.body !== undefined ? JSON.stringify(opts.body) : undefined)
   });
   // Resilient parse: an empty body (204/304) or a non-JSON error page must not
@@ -24,7 +48,7 @@ export const COLORS: Record<string, string> = {
  'Dining & Fast Food':'#0ca678','Insurance':'#099268','Utilities & Bills':'#0b7285','Gas & Convenience':'#1c7ed6',
  'Entertainment':'#f76707','Savings & Investments':'#4263eb','Subscriptions & Digital':'#ae3ec9','Health & Pharmacy':'#15aabf',
  'Gym & Fitness':'#d6336c','Auto':'#fd7e14','Cash Withdrawals':'#9c36b5','Vape & Tobacco':'#94a000',
- 'Bars & Nightlife':'#e8b500','Personal Care':'#d9480f','Fees':'#868e96','Taxes':'#228be6','Other':'#adb5bd','Income & Refunds':'#188d49'
+ 'Bars & Nightlife':'#e8b500','Personal Care':'#d9480f','Fees':'#868e96','Taxes':'#228be6','Other':'#adb5bd','Income':'#188d49','Refunds':'#2b8a3e','Income & Refunds':'#188d49'
 };
 export const color = (c: string) => COLORS[c] || '#adb5bd';
 

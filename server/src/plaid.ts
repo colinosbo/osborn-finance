@@ -7,7 +7,7 @@ import { encrypt } from './crypto.js';
 import { createHash } from 'crypto';
 import { jwtVerify, importJWK, decodeProtectedHeader, type JWK } from 'jose';
 
-interface PlaidTxn { transaction_id: string; date: string; name: string; amount: number; pending: boolean; personal_finance_category?: { primary?: string; detailed?: string } | null; }
+interface PlaidTxn { transaction_id: string; date: string; name: string; amount: number; pending: boolean; account_id?: string; merchant_name?: string | null; personal_finance_category?: { primary?: string; detailed?: string } | null; }
 
 async function plaidPost(path: string, body: Record<string, unknown>) {
   const res = await fetch(`https://${cfg.plaid.env}.plaid.com${path}`, {
@@ -59,19 +59,19 @@ export const Plaid = {
       if (cursor === 'done') return { added: [], next_cursor: 'done' };
       const today = new Date();
       const added: PlaidTxn[] = [];
-      const names = ['STARBUCKS STORE 0882', 'WAL-MART SUPERCENTER', 'SHELL OIL 5744', 'TARGET 00078', 'CHIPOTLE 1187', 'ACME LOGISTICS INC PAYROLL DIRECT DEP'];
+      const names: [string, string | null][] = [['STARBUCKS STORE 0882', 'Starbucks'], ['WAL-MART SUPERCENTER', 'Walmart'], ['SHELL OIL 5744', 'Shell'], ['TARGET 00078', 'Target'], ['CHIPOTLE 1187', 'Chipotle'], ['ACME LOGISTICS INC PAYROLL DIRECT DEP', null]];
       for (let i = 0; i < 30; i++) {
         const d = new Date(today); d.setDate(d.getDate() - i * 3);
-        const name = names[i % names.length];
+        const [name, merchant_name] = names[i % names.length];
         // Plaid convention: positive = outflow; we negate on import
-        added.push({ transaction_id: 'mock-' + accessToken.slice(-6) + '-' + i, date: d.toISOString().slice(0, 10), name, amount: name.includes('PAYROLL') ? -1420 : +(5 + (i * 7.13) % 80).toFixed(2), pending: false });
+        added.push({ transaction_id: 'mock-' + accessToken.slice(-6) + '-' + i, date: d.toISOString().slice(0, 10), name, merchant_name, amount: name.includes('PAYROLL') ? -1420 : +(5 + (i * 7.13) % 80).toFixed(2), pending: false });
       }
       // Clean monthly subscriptions (~30-day cadence, steady amount) so the
       // recurring detector and the report's subscriptions section are demoable.
-      for (const [name, amt] of [['NETFLIX.COM', 15.49], ['SPOTIFY USA', 11.99], ['HULU 877-824-4858', 17.99]] as [string, number][]) {
+      for (const [name, mname, amt] of [['NETFLIX.COM', 'Netflix', 15.49], ['SPOTIFY USA', 'Spotify', 11.99], ['HULU 877-824-4858', 'Hulu', 17.99]] as [string, string, number][]) {
         for (let k = 0; k < 4; k++) {
           const d = new Date(today); d.setDate(d.getDate() - k * 30);
-          added.push({ transaction_id: `mock-sub-${name.slice(0, 4)}-${k}`, date: d.toISOString().slice(0, 10), name, amount: amt, pending: false });
+          added.push({ transaction_id: `mock-sub-${name.slice(0, 4)}-${k}`, date: d.toISOString().slice(0, 10), name, merchant_name: mname, amount: amt, pending: false });
         }
       }
       return { added, next_cursor: 'done' };
@@ -150,19 +150,28 @@ export async function runItemSync(store: Store, userId: string, itemDbId: string
   // Transactions next (may legitimately be empty for a freshly linked item).
   const overrides = await store.getOverrides(userId);
   const { added, next_cursor } = await Plaid.syncTransactions(accessToken, cursor);
+  // Map each Plaid account id to its name so transactions carry which account they
+  // belong to — required for netting transfers between the user's own accounts.
+  const acctName = new Map(accts.map(a => [a.account_id, a.name]));
   const rows = added.filter(t => !t.pending).map(t => {
     const amount = -t.amount; // Plaid: positive = money out
-    const merch = merchant(t.name);
+    // Prefer Plaid's cleaned merchant_name (e.g. "Amazon") over our descriptor cleaner:
+    // it's more accurate and lets refund netting match a card refund to its purchase by
+    // vendor (Pass 1) before resorting to amount-only matching.
+    const merch = (t.merchant_name && t.merchant_name.trim()) || merchant(t.name);
     let category: string;
     if (amount > 0) {
-      category = 'Income & Refunds';
+      // Inflow: classify() splits real income from refunds (return/reversal/credit) by
+      // descriptor, so a refunded purchase that posts as a credit isn't counted as income.
+      category = classify(t.name, amount);
+      if (overrides[merch]) category = overrides[merch];
     } else {
       // Prefer Plaid's own categorization; fall back to keyword rules (e.g. CSV-like names).
       const fromPlaid = classifyFromPlaid(t.personal_finance_category);
-      category = fromPlaid && fromPlaid !== 'Income & Refunds' ? fromPlaid : classify(t.name, amount);
+      category = fromPlaid && fromPlaid !== 'Income' ? fromPlaid : classify(t.name, amount);
       if (overrides[merch]) category = overrides[merch];
     }
-    return { user_id: userId, date: t.date, name: cleanDesc(t.name), merchant: merch, amount, balance: null, category, source: 'plaid', plaid_transaction_id: t.transaction_id, item_id: itemDbId };
+    return { user_id: userId, date: t.date, name: cleanDesc(t.name), merchant: merch, amount, balance: null, category, source: 'plaid', plaid_transaction_id: t.transaction_id, item_id: itemDbId, account: t.account_id ? (acctName.get(t.account_id) || null) : null };
   });
   await store.insertTx(rows);
   if (next_cursor) await store.setCursor(itemDbId, next_cursor);

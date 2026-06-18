@@ -4,7 +4,7 @@ import { loadPrefs } from '../prefs';
 import EmptyState from '../EmptyState';
 import RangePicker, { DEFAULT_RANGE, rangeQS, type RangeOpt } from '../RangePicker';
 
-interface Tip { icon: string; title: string; text: string; savePerMonth: number; savePerYear?: number; goalImpact?: string }
+interface Tip { icon: string; title: string; text: string; savePerMonth: number; savePerYear?: number }
 interface Factor { label: string; status: 'good' | 'ok' | 'warn'; points: number; max: number; detail: string }
 interface Bud { amount: number; pct: number; guide: number }
 interface Trend { category: string; now: number; prev: number; deltaPct: number; deltaAbs: number; direction: 'up' | 'down' | 'new' }
@@ -45,7 +45,14 @@ export default function Advisor() {
   const [a, setA] = useState<Adv | null>(null);
   const [range, setRange] = useState<RangeOpt>(DEFAULT_RANGE);
   const [err, setErr] = useState('');
-  useEffect(() => { setA(null); api<Adv>(`/api/advisor?${rangeQS(range)}`).then(setA).catch(e => setErr(e.message)); }, [range]);
+  const [accounts, setAccounts] = useState<string[]>([]);
+  const [acctFilter, setAcctFilter] = useState('');
+  useEffect(() => { api<string[]>('/api/tx-accounts').then(setAccounts).catch(() => {}); }, []);
+  useEffect(() => {
+    setA(null);
+    const qs = rangeQS(range) + (acctFilter ? `&accounts=${encodeURIComponent(acctFilter)}` : '');
+    api<Adv>(`/api/advisor?${qs}`).then(setA).catch(e => setErr(e.message));
+  }, [range, acctFilter]);
 
   return (
     <>
@@ -53,6 +60,12 @@ export default function Advisor() {
       <div className="sec-sub">Your financial health, what changed, and the highest-impact moves, recalculated for the selected period</div>
       <div className="controls">
         <RangePicker value={range.value} onChange={setRange} />
+        {accounts.length > 1 && (
+          <select value={acctFilter} onChange={e => setAcctFilter(e.target.value)}>
+            <option value="">All accounts</option>
+            {accounts.map(a => <option key={a} value={a}>{a}</option>)}
+          </select>
+        )}
       </div>
 
       {err && <div className="empty">Error: {err}</div>}
@@ -159,7 +172,6 @@ export default function Advisor() {
                 <div className="adv-act-body">
                   <div className="adv-act-title">{t.icon} {t.title}</div>
                   <div className="adv-act-text">{t.text}</div>
-                  {t.goalImpact && <div className="adv-act-goal">🎯 {t.goalImpact}</div>}
                 </div>
                 {t.savePerYear && t.savePerYear > 12 ? <div className="adv-act-save"><b>{fmt0(t.savePerYear)}</b><span>/yr</span></div> : <div className="adv-act-save muted">·</div>}
               </div>
@@ -171,3 +183,4 @@ export default function Advisor() {
     </>
   );
 }
+

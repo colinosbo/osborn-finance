@@ -30,7 +30,6 @@ const CMP_ROWS: { label: string; cells: (boolean | string)[] }[] = [
   { label: 'Auto-categorized spending', cells: [false, true, true] },
   { label: 'Finds recurring subscriptions', cells: [false, false, true] },
   { label: 'Flags when a bill goes up', cells: [false, false, true] },
-  { label: 'Savings goals with projections', cells: ['Manual', false, true] },
   { label: 'Exportable reports & PDFs', cells: ['Manual', false, true] }
 ];
 const CMP_HEADS = ['Spreadsheet', "Your bank's app", 'Covisor'];
@@ -220,3 +219,4 @@ export default function DashboardLanding() {
     </div>
   );
 }
+

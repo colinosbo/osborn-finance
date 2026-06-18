@@ -5,7 +5,7 @@
 import type { Tx, Account, Snapshot } from './store.js';
 import { advise } from './analytics.js';
 import { detectRecurring } from './recurring.js';
-import { isMovement } from './classifier.js';
+import { isMovement, isIncome } from './classifier.js';
 
 export type Cadence = 'weekly' | 'monthly' | 'six_month' | 'year_in_review';
 export const CADENCES: Cadence[] = ['weekly', 'monthly', 'six_month', 'year_in_review'];
@@ -49,7 +49,7 @@ function rangeWindow(anchor: string, days: number, offset: number): Win {
 const inWin = (tx: Tx[], from: string, to: string) => tx.filter(t => t.date >= from && t.date <= to);
 
 function metrics(rows: Tx[]) {
-  const income = rows.filter(t => t.amount > 0).reduce((s, t) => s + t.amount, 0);
+  const income = rows.filter(isIncome).reduce((s, t) => s + t.amount, 0);
   const spend = Math.abs(rows.filter(t => t.amount < 0).reduce((s, t) => s + t.amount, 0));
   const net = income - spend;
   return { income: r2(income), spend: r2(spend), net: r2(net), savingsRate: r2(income > 0 ? net / income * 100 : 0), count: rows.length };
@@ -78,7 +78,7 @@ function trendSeries(rows: Tx[], from: string, to: string, grain: Grain) {
   for (const t of rows) {
     const k = grain === 'day' ? t.date : grain === 'month' ? t.date.slice(0, 7) : 'w' + Math.floor((Date.parse(t.date) - Date.parse(from)) / DAY / 7);
     const i = idx.get(k); if (i == null) continue;
-    if (t.amount > 0) series[i].in += t.amount; else series[i].out += Math.abs(t.amount);
+    if (isIncome(t)) series[i].in += t.amount; else if (t.amount < 0) series[i].out += Math.abs(t.amount);
   }
   for (const s of series) { s.in = r2(s.in); s.out = r2(s.out); s.net = r2(s.in - s.out); }
   return series;
@@ -89,6 +89,9 @@ function assemble(tx: Tx[], w: Win) {
   const span = Math.round((Date.parse(w.to) - Date.parse(w.from)) / DAY) + 1;
   const prevTo = shift(w.from, -1), prevFrom = shift(prevTo, -(span - 1));
   const cur = inWin(tx, w.from, w.to), prev = inWin(tx, prevFrom, prevTo);
+  // If the prior period has no transactions at all, deltas are meaningless (they'd just
+  // equal the current value). Null them out so the UI shows "—" instead of "+$1,513".
+  const hasPrior = prev.length > 0;
   // Spending views exclude money movement (debt payoff, transfers, saving), which is
   // not consumption. Income (positive amounts) is kept.
   const curC = cur.filter(t => !(t.amount < 0 && isMovement(t.category)));
@@ -98,7 +101,7 @@ function assemble(tx: Tx[], w: Win) {
 
   const categories = Object.keys(cc).map(name => {
     const total = r2(cc[name].total), prevTotal = r2(cp[name]?.total || 0);
-    return { name, total, count: cc[name].count, prev: prevTotal, delta: r2(total - prevTotal), share: m.spend ? r2(total / m.spend * 100) : 0 };
+    return { name, total, count: cc[name].count, prev: prevTotal, delta: hasPrior ? r2(total - prevTotal) : null, share: m.spend ? r2(total / m.spend * 100) : 0 };
   }).sort((a, b) => b.total - a.total);
 
   const mt = merchTotals(curC);
@@ -107,7 +110,7 @@ function assemble(tx: Tx[], w: Win) {
   // Income by source (positive amounts grouped by merchant/payer), mirrors the
   // spending breakdown. `trend[].in` carries income-over-time for the line graph.
   const incSrc: Record<string, { total: number; count: number }> = {};
-  for (const t of curC) if (t.amount > 0) { const k = t.merchant || t.name; (incSrc[k] ||= { total: 0, count: 0 }).total += t.amount; incSrc[k].count++; }
+  for (const t of curC) if (isIncome(t)) { const k = t.merchant || t.name; (incSrc[k] ||= { total: 0, count: 0 }).total += t.amount; incSrc[k].count++; }
   const incomeSources = Object.entries(incSrc).map(([name, v]) => ({ name, total: r2(v.total), count: v.count })).sort((a, b) => b.total - a.total).slice(0, 12);
   // Biggest spend GROUPS — aggregate repeated purchases by merchant (e.g. 4 CD
   // deposits => one row of -$4,000 with count 4), sorted by total outflow.
@@ -125,7 +128,7 @@ function assemble(tx: Tx[], w: Win) {
   // Subscriptions page) over full history, not a category filter, so the report
   // agrees with the tracker and lists every active subscription (no 8-cap).
   const activeSubs = detectRecurring(tx).subscriptions.filter(s => s.active);
-  const mk = (cv: number, pv: number, rate = false) => ({ value: cv, prev: pv, delta: r2(cv - pv), pct: rate ? null : pct(cv, pv) });
+  const mk = (cv: number, pv: number, rate = false) => ({ value: cv, prev: pv, delta: hasPrior ? r2(cv - pv) : null, pct: hasPrior && !rate ? pct(cv, pv) : null });
 
   return {
     period: { from: w.from, to: w.to, label: w.label, days: span, grain: w.grain },

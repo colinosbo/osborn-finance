@@ -35,7 +35,7 @@ describe('Osborn Finance API (mock mode)', () => {
     expect(r.json.imported).toBe(458);
     const s = await call('GET', '/api/summary?days=0');
     expect(s.json.income).toBeCloseTo(37823.19, 2);
-    expect(s.json.spend).toBeCloseTo(35311.32, 2);
+    expect(s.json.spend).toBeCloseTo(31490.24, 2); // excludes movement cats (credit card pmts, Robinhood, Venmo)
     expect(s.json.categories.find((c: {name:string}) => c.name === 'Rent & Housing').total).toBe(13800);
     expect((s.json.categories.find((c: {name:string}) => c.name === 'Other')?.total || 0)).toBe(0);
   });
@@ -164,6 +164,22 @@ describe('Security fixes', () => {
     const r = await call('POST', '/api/import/csv', big, 'text/csv');
     expect(r.status).toBe(413);
   });
+  it('FIX (Bug-2): pinned transaction survives bulk reclassify', async () => {
+    const U = { 'x-user-email': 'pin-fix@osborn.dev' }; // isolated user
+    // Import a row that the classifier will assign to "Dining & Fast Food"
+    const pinCsv = 'Date,Amount,Transaction Type,Description\n2026-05-01,12.50,Debit,Withdrawal POS STARBUCKS COFFEE';
+    await call('POST', '/api/import/csv', pinCsv, 'text/csv', U);
+    const led = await call('GET', '/api/transactions?limit=5', undefined, 'application/json', U);
+    const tx = led.json.rows[0];
+    expect(tx.category).toBe('Dining & Fast Food'); // classifier default
+    // Manually pin it to a different category
+    const patch = await call('PATCH', `/api/transactions/${tx.id}`, { category: 'Entertainment' }, 'application/json', U);
+    expect(patch.json.ok).toBe(true);
+    // Now bulk-reclassify — the pinned tx must NOT revert
+    await call('POST', '/api/transactions/reclassify', undefined, 'application/json', U);
+    const led2 = await call('GET', '/api/transactions?limit=5', undefined, 'application/json', U);
+    expect(led2.json.rows[0].category).toBe('Entertainment'); // still pinned, not overwritten
+  });
   it('FIX: unlinking a bank removes that bank\'s transactions', async () => {
     const U = { 'x-user-email': 'unlink-fix@osborn.dev' }; // isolated user
     await call('POST', '/api/billing/checkout', { plan: 'personal' }, 'application/json', U);
@@ -244,5 +260,208 @@ describe('Reports engine', () => {
     const custom = await call('GET', '/api/reports?days=45&offset=1', undefined, 'application/json', U);
     expect(custom.json.days).toBe(45);
     expect(custom.json.period.days).toBe(45);
+  });
+});
+
+describe('Internal-transfer netting', () => {
+  const U = { 'x-user-email': 'transfers@osborn.dev' };
+  // Payroll (income), one real purchase (spend), and a $200 move between the user's
+  // OWN Checking and Savings accounts (the Account column names each). The transfer
+  // pair sits in two DIFFERENT known accounts, so it must NOT count as income/spend.
+  const transfersCsv = [
+    'Date,Amount,Transaction Type,Description,Account',
+    '2026-05-01,1000.00,Credit,Deposit PAYROLL Q INTERNATIONAL,Checking (0114)',
+    '2026-05-02,50.00,Debit,Withdrawal POS MCDONALDS PLAINFIELD IL,Checking (0114)',
+    '2026-05-03,200.00,Debit,Withdrawal Home Banking Transfer To Savings 0001,Checking (0114)',
+    '2026-05-03,200.00,Credit,Deposit Home Banking Transfer From Checking 0114,Savings (0001)',
+  ].join('\n');
+
+  it('excludes internal transfers from income and spend, keeps them tagged in the ledger', async () => {
+    const imp = await call('POST', '/api/import/csv', transfersCsv, 'text/csv', U);
+    expect(imp.json.imported).toBe(4);
+    const s = await call('GET', '/api/summary?days=0', undefined, 'application/json', U);
+    expect(s.json.income).toBeCloseTo(1000, 2);   // 200 transfer-in excluded
+    expect(s.json.spend).toBeCloseTo(50, 2);       // 200 transfer-out excluded
+    expect(s.json.net).toBeCloseTo(950, 2);
+    // both legs still present in the ledger, tagged as a transfer
+    const led = await call('GET', '/api/transactions?days=0&limit=50', undefined, 'application/json', U);
+    const tagged = led.json.rows.filter((t: { transfer?: string }) => t.transfer);
+    expect(tagged.length).toBe(2);
+    expect(new Set(tagged.map((t: { transfer: string }) => t.transfer))).toEqual(new Set(['transfer_out', 'transfer_in']));
+  });
+
+  it('does NOT net a transfer-shaped pair that lacks a distinct second account', async () => {
+    const V = { 'x-user-email': 'transfers-noacct@osborn.dev' };
+    // No Account column → unknown account → cannot confirm it stayed between the
+    // user's own accounts, so both legs still count.
+    const csvNoAcct = [
+      'Date,Amount,Transaction Type,Description',
+      '2026-05-03,200.00,Debit,Withdrawal Home Banking Transfer To Savings 0001',
+      '2026-05-03,200.00,Credit,Deposit Home Banking Transfer From Checking 0114',
+    ].join('\n');
+    await call('POST', '/api/import/csv', csvNoAcct, 'text/csv', V);
+    const s = await call('GET', '/api/summary?days=0', undefined, 'application/json', V);
+    expect(s.json.income).toBeCloseTo(200, 2);  // not netted
+    expect(s.json.spend).toBeCloseTo(200, 2);   // not netted
+  });
+});
+
+import { detectRecurring } from '../src/recurring.js';
+import type { Tx } from '../src/store.js';
+
+describe('Subscription detection: income is never a subscription', () => {
+  let n = 0;
+  const mk = (date: string, amount: number, name: string, merchant: string, category: string): Tx => ({
+    id: `t${n++}`, user_id: 'u', date, name, merchant, amount, balance: null, category, source: 'csv'
+  });
+  // Build a perfectly regular biweekly series at a fixed amount (the shape of a paycheck).
+  const series = (dates: string[], amount: number, name: string, merchant: string, category: string) =>
+    dates.map(d => mk(d, amount, name, merchant, category));
+  const biweekly = ['2026-04-03', '2026-04-17', '2026-05-01', '2026-05-15', '2026-05-29', '2026-06-12'];
+  const monthly = ['2026-02-15', '2026-03-15', '2026-04-15', '2026-05-15', '2026-06-15'];
+  const NOW = '2026-06-17';
+
+  it('does not flag a sign-flipped/miscategorized payroll as a subscription', () => {
+    // A paycheck whose debit/credit column was misread on import: negative amount,
+    // category fell through to "Other", but the descriptor reads as payroll.
+    const tx = series(biweekly, -1500, 'ACME LOGISTICS PAYROLL DIRECT DEP', 'Acme Logistics (Payroll)', 'Other');
+    const subs = detectRecurring(tx, NOW).subscriptions;
+    expect(subs.length).toBe(0);
+  });
+
+  it('does not flag income-categorized inflows as a subscription', () => {
+    const tx = series(biweekly, 1500, 'DEPOSIT PAYROLL Q INTERNATIONAL', 'Q International', 'Income');
+    expect(detectRecurring(tx, NOW).subscriptions.length).toBe(0);
+  });
+
+  it('does not flag recurring interest/direct-deposit descriptors even at negative amounts', () => {
+    const tx = series(monthly, -42.5, 'INTEREST PAID', 'Bank', 'Other');
+    expect(detectRecurring(tx, NOW).subscriptions.length).toBe(0);
+  });
+
+  it('still detects a genuine recurring subscription (guard does not over-block)', () => {
+    const tx = series(monthly, -15.99, 'NETFLIX.COM', 'Netflix', 'Subscriptions & Digital');
+    const subs = detectRecurring(tx, NOW).subscriptions;
+    expect(subs.length).toBe(1);
+    expect(subs[0].merchant).toBe('Netflix');
+    expect(subs[0].active).toBe(true);
+  });
+
+  it('detects a real subscription while ignoring a payroll mixed into the same dataset', () => {
+    const tx = [
+      ...series(monthly, -15.99, 'NETFLIX.COM', 'Netflix', 'Subscriptions & Digital'),
+      ...series(biweekly, -1500, 'ACME LOGISTICS PAYROLL', 'Acme Logistics (Payroll)', 'Other'),
+    ];
+    const subs = detectRecurring(tx, NOW).subscriptions;
+    expect(subs.map(s => s.merchant)).toEqual(['Netflix']);
+  });
+
+  it('does not flag a buy-then-refund cycle (net $0) as a subscription', () => {
+    // United Airlines: a $500 ticket charged then refunded $500 each month, alternating,
+    // nets to $0. Refund netting pairs the legs; the surviving outflows must NOT show up
+    // as a $500/mo subscription.
+    const tx = [
+      mk('2026-03-30', -500, 'UNITED AIRLINES WITHDRAWAL', 'United Airlines', 'Other'),
+      mk('2026-04-12', 500, 'UNITED AIRLINES DEPOSIT', 'United Airlines', 'Income'),
+      mk('2026-04-29', -500, 'UNITED AIRLINES WITHDRAWAL', 'United Airlines', 'Other'),
+      mk('2026-05-12', 500, 'UNITED AIRLINES DEPOSIT', 'United Airlines', 'Income'),
+      mk('2026-05-29', -500, 'UNITED AIRLINES WITHDRAWAL', 'United Airlines', 'Other'),
+      mk('2026-06-11', 500, 'UNITED AIRLINES DEPOSIT', 'United Airlines', 'Income'),
+    ];
+    expect(detectRecurring(tx, NOW).subscriptions.length).toBe(0);
+  });
+
+  it('still flags a genuine monthly charge that is NOT refunded', () => {
+    // Same vendor/cadence, but no offsetting refunds → a real recurring cost.
+    const tx = series(monthly, -500, 'UNITED CLUB MEMBERSHIP', 'United Airlines', 'Other');
+    const subs = detectRecurring(tx, NOW).subscriptions;
+    expect(subs.length).toBe(1);
+    expect(subs[0].monthlyCost).toBeGreaterThan(0);
+  });
+});
+
+describe('Refund netting reflected across every income/spend/net surface', () => {
+  const RU = { 'x-user-email': 'refund-surfaces@osborn.dev' };
+  // $1000 bought in May, fully refunded in June (26 days later) at the SAME vendor for
+  // the exact amount, under descriptors that differ by direction + RETURN (an unlisted
+  // merchant). It must vanish from every overall total but stay visible in the ledger.
+  const csv = [
+    'Date,Amount,Transaction Type,Description',
+    '2026-05-01,3000.00,Credit,Deposit PAYROLL Q INTERNATIONAL',
+    '2026-05-15,50.00,Debit,Withdrawal POS MCDONALDS PLAINFIELD IL',
+    '2026-05-10,1000.00,Debit,Withdrawal DEBIT CARD BIGTICKET ELECTRONICS CHICAGO IL',
+    '2026-06-05,1000.00,Credit,Deposit DEBIT CARD BIGTICKET ELECTRONICS CHICAGO IL RETURN',
+  ].join('\n');
+
+  it('nets the buy-then-refund out of summary, reports, advisor and debt; keeps it tagged in the ledger', async () => {
+    expect((await call('POST', '/api/import/csv', csv, 'text/csv', RU)).json.imported).toBe(4);
+
+    const s = (await call('GET', '/api/summary?days=0', undefined, 'application/json', RU)).json;
+    expect(s.income).toBeCloseTo(3000, 2);   // refunded $1000 not counted as income
+    expect(s.spend).toBeCloseTo(50, 2);      // refunded $1000 charge not counted as spend
+    expect(s.net).toBeCloseTo(2950, 2);
+
+    const rep = (await call('GET', '/api/reports?from=2026-04-30&to=2026-06-30', undefined, 'application/json', RU)).json;
+    expect(rep.kpis.income.value).toBeCloseTo(3000, 2);
+    expect(rep.kpis.spend.value).toBeCloseTo(50, 2);
+
+    const adv = (await call('GET', '/api/advisor', undefined, 'application/json', RU)).json;
+    expect(adv.period.income).toBeCloseTo(3000, 2);
+    expect(adv.period.spend).toBeCloseTo(50, 2);
+
+    const debt = (await call('GET', '/api/debt', undefined, 'application/json', RU)).json;
+    expect(debt.monthlyProfit).toBeCloseTo(2950, 2); // net cash flow, refund excluded
+
+    const led = (await call('GET', '/api/transactions?days=0&limit=50', undefined, 'application/json', RU)).json;
+    expect(led.rows.filter((t: { refund?: string }) => t.refund).length).toBe(2); // both legs shown, tagged
+  });
+});
+
+describe('Refunds are a separate category: excluded from income, kept in the ledger', () => {
+  const RC = { 'x-user-email': 'refund-cat@osborn.dev' };
+  // A standalone refund (a return that we recognize by descriptor but can't pair to a
+  // specific earlier purchase) must NOT count as income, yet must remain in the ledger.
+  const csv = [
+    'Date,Amount,Transaction Type,Description',
+    '2026-05-01,3000.00,Credit,Deposit PAYROLL Q INTERNATIONAL',
+    '2026-05-20,200.00,Credit,Deposit DEBIT CARD ACME OUTDOORS REFUND',
+  ].join('\n');
+  it('classifies a refund as Refunds, keeps it out of total income, and still lists it', async () => {
+    expect((await call('POST', '/api/import/csv', csv, 'text/csv', RC)).json.imported).toBe(2);
+    const s = (await call('GET', '/api/summary?days=0', undefined, 'application/json', RC)).json;
+    expect(s.income).toBeCloseTo(3000, 2); // the $200 refund is NOT income
+    const led = (await call('GET', '/api/transactions?days=0&limit=50&flow=in', undefined, 'application/json', RC)).json;
+    const refundRow = led.rows.find((t: { category: string }) => t.category === 'Refunds');
+    expect(refundRow).toBeTruthy();                 // still visible in the ledger
+    expect(refundRow.amount).toBeCloseTo(200, 2);
+  });
+});
+
+describe('Income is reported consistently across every surface', () => {
+  const IU = { 'x-user-email': 'income-surfaces@osborn.dev' };
+  // One clean month: $4,000 payroll (income) + a little spending, no refunds/transfers.
+  const csv = [
+    'Date,Amount,Transaction Type,Description',
+    '2026-05-01,4000.00,Credit,Deposit PAYROLL Q INTERNATIONAL',
+    '2026-05-10,120.00,Debit,Withdrawal POS WALMART NORMAL IL',
+    '2026-05-20,80.00,Debit,Withdrawal POS SHELL OIL BLOOMINGTON IL',
+  ].join('\n');
+
+  it('summary, reports and advisor all report the same income, broken down by source', async () => {
+    expect((await call('POST', '/api/import/csv', csv, 'text/csv', IU)).json.imported).toBe(3);
+
+    const sum = (await call('GET', '/api/summary?days=0', undefined, 'application/json', IU)).json;
+    const rep = (await call('GET', '/api/reports?from=2026-04-30&to=2026-05-31', undefined, 'application/json', IU)).json;
+    const adv = (await call('GET', '/api/advisor', undefined, 'application/json', IU)).json;
+
+    // Same income value on the dashboard (summary), the reports KPI, and the advisor.
+    expect(sum.income).toBeCloseTo(4000, 2);
+    expect(rep.kpis.income.value).toBeCloseTo(4000, 2);
+    expect(adv.period.income).toBeCloseTo(4000, 2);
+    expect(adv.budget.income).toBeCloseTo(4000, 2);
+
+    // Income is also surfaced broken down by source on the reports page.
+    expect(rep.incomeSources.reduce((s, x) => s + x.total, 0)).toBeCloseTo(4000, 2);
+    expect(rep.incomeSources.length).toBeGreaterThan(0);
   });
 });
