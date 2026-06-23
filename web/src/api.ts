@@ -23,9 +23,10 @@ export async function api<T = unknown>(path: string, opts: { method?: string; bo
   if (_getToken) {
     try { const t = await _getToken(); if (t) headers['Authorization'] = `Bearer ${t}`; } catch { /* not signed in */ }
   }
-  // Dev-mode server fallback: send x-user-email so AUTH_MODE=dev still works locally.
-  const email = _getUserEmail?.() || 'demo@covisor.com';
-  headers['x-user-email'] = email;
+  // Dev-mode server fallback: only send x-user-email when a real user is known,
+  // so AUTH_MODE=dev works locally without leaking a hardcoded identity in production.
+  const email = _getUserEmail?.();
+  if (email) headers['x-user-email'] = email;
 
   const res = await fetch(API_BASE + path, {
     method: opts.method || 'GET',
